@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "lib": ["ES2020"],
+    "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "paths": {
+      "@/*": ["src/*"],
+      "@tests/*": ["tests/*"],
+      "@servezap/shared": ["../../../../shared/*"]
+    }
+  },
+  "include": [
+    "src/**/*",
+    "tests/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ],
+  "vitest": {
+    "test": {
+      "include": ["tests/**/*"],
+      "exclude": ["node_modules"]
+    }
+  }
+}

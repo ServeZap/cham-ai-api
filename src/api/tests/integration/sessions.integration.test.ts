@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { createTestDatabase, initChamAISchema } from '../helpers/test-db.js';
+import { createTestDatabase, initChamAISchema } from '../helpers/test-db.ts';
 
 describe('Sessions Repository Integration Tests', () => {
   let testDb: ReturnType<typeof createTestDatabase>;

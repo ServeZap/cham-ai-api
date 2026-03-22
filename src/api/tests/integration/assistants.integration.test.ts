@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
-import { createTestDatabase, initChamAISchema } from '../helpers/test-db.js';
+import { createTestDatabase, initChamAISchema } from '../helpers/test-db.ts';
 
 describe('Assistants Repository Integration Tests', () => {
   let testDb: ReturnType<typeof createTestDatabase>;

@@ -1,316 +1,249 @@
 /**
- * Test Database Setup Helper
+ * Test Database Setup Helper - Cham.ai
  *
- * Helper para configurar banco de dados em memória para testes de integração
+ * This file extends the shared test database with Cham.ai-specific schemas.
  */
 
 import Database from 'better-sqlite3';
+import {
+  createTestDatabase as createSharedDatabase,
+  TestDatabase as SharedTestDatabase,
+  TestSeedData,
+  TENANTS_TABLE_SCHEMA,
+  USERS_TABLE_SCHEMA,
+  AUDIT_LOG_SCHEMA,
+} from '@servezap/shared/testing/test-db';
 
-export interface TestDatabase {
-  db: Database.Database;
-  close: () => void;
-  reset: () => void;
-  seed: (data?: any) => void;
+// Cham.ai specific tables
+export const CALLS_TABLE_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS calls (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    from_number TEXT NOT NULL,
+    to_number TEXT NOT NULL,
+    direction TEXT CHECK(direction IN ('inbound', 'outbound')),
+    status TEXT DEFAULT 'ended',
+    duration INTEGER,
+    transcription TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+  );
+`;
+
+export const CALLS_INDEXES = `
+  CREATE INDEX IF NOT EXISTS idx_calls_tenant ON calls(tenant_id);
+  CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status);
+`;
+
+export const VOICE_MAILS_TABLE_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS voice_mails (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    from_number TEXT NOT NULL,
+    duration INTEGER,
+    transcription TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+  );
+`;
+
+export const SESSIONS_TABLE_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    assistant_id TEXT,
+    user_id TEXT,
+    status TEXT DEFAULT 'active',
+    context TEXT DEFAULT '{}',
+    started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    ended_at TEXT,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+  );
+`;
+
+export const SESSIONS_INDEXES = `
+  CREATE INDEX IF NOT EXISTS idx_sessions_tenant ON sessions(tenant_id);
+  CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+`;
+
+export const MESSAGES_TABLE_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT,
+    session_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT,
+    audio_url TEXT,
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+  );
+`;
+
+export const MESSAGES_INDEXES = `
+  CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+`;
+
+export const ASSISTANTS_TABLE_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS assistants (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    voice_id TEXT DEFAULT 'default',
+    model TEXT DEFAULT 'gpt-4o',
+    prompt_template TEXT,
+    settings TEXT DEFAULT '{}',
+    temperature REAL DEFAULT 0.7,
+    status TEXT DEFAULT 'active',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+  );
+`;
+
+export const ASSISTANTS_INDEXES = `
+  CREATE INDEX IF NOT EXISTS idx_assistants_tenant ON assistants(tenant_id);
+`;
+
+export const KNOWLEDGE_BASE_TABLE_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS knowledge_base (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    category TEXT,
+    tags TEXT DEFAULT '[]',
+    embedding BLOB,
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+  );
+`;
+
+export const KNOWLEDGE_BASE_INDEXES = `
+  CREATE INDEX IF NOT EXISTS idx_kb_tenant ON knowledge_base(tenant_id);
+`;
+
+export const WEBHOOKS_TABLE_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS webhooks (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    url TEXT NOT NULL,
+    events TEXT NOT NULL,
+    secret TEXT,
+    status TEXT DEFAULT 'active',
+    last_triggered_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+  );
+`;
+
+/**
+ * Extended TestDatabase interface with Cham.ai specific methods
+ */
+export interface TestDatabase extends SharedTestDatabase {
+  getCallCount: () => number;
+  getVoiceMailCount: () => number;
 }
 
 /**
- * Creates an in-memory SQLite database for testing
+ * Creates a test database with common + Cham.ai specific tables
  */
-export function createTestDatabase(): TestDatabase {
-  const db = new Database(':memory:');
+export function createTestDatabase(customSchemas?: string[]): TestDatabase {
+  const tableSchemas = [
+    CALLS_TABLE_SCHEMA,
+    VOICE_MAILS_TABLE_SCHEMA,
+    SESSIONS_TABLE_SCHEMA,
+    MESSAGES_TABLE_SCHEMA,
+    ASSISTANTS_TABLE_SCHEMA,
+    KNOWLEDGE_BASE_TABLE_SCHEMA,
+    WEBHOOKS_TABLE_SCHEMA,
+  ];
 
-  // Enable foreign keys
-  db.pragma('foreign_keys = ON');
+  const indexSchemas = [
+    CALLS_INDEXES,
+    SESSIONS_INDEXES,
+    MESSAGES_INDEXES,
+    ASSISTANTS_INDEXES,
+    KNOWLEDGE_BASE_INDEXES,
+  ];
+
+  const allSchemas = [
+    ...tableSchemas,
+    ...indexSchemas,
+    ...(customSchemas || []),
+  ];
+
+  const sharedDb = createSharedDatabase(allSchemas);
+  const db = sharedDb.db;
 
   return {
-    db,
-    close: () => db.close(),
-    reset: () => {
-      // Drop all tables safely - ignore if no tables exist yet
-      try {
-        const tables = db
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-          )
-          .all() as { name: string }[];
-        tables.forEach((table) => {
-          db.exec(`DROP TABLE IF EXISTS ${table.name}`);
-        });
-      } catch (e) {
-        // Ignore errors if no tables exist yet
-      }
+    ...sharedDb,
+
+    getCallCount: () => {
+      const result = db.prepare('SELECT COUNT(*) as count FROM calls').get() as { count: number };
+      return result.count;
     },
-    seed: (data?: any) => {
-      // Seed with test data
-      if (data?.tenants) {
-        const insertTenant = db.prepare(`
-          INSERT INTO tenants (id, name, slug, plan, api_key, status, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-        data.tenants.forEach((tenant: any) => {
-          insertTenant.run(
-            tenant.id,
-            tenant.name,
-            tenant.slug,
-            tenant.plan,
-            tenant.api_key,
-            tenant.status,
-            tenant.created_at || new Date().toISOString(),
-            tenant.updated_at || new Date().toISOString()
-          );
-        });
-      }
 
-      if (data?.users) {
-        const insertUser = db.prepare(`
-          INSERT INTO users (id, tenant_id, email, name, role, status, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-        data.users.forEach((user: any) => {
-          insertUser.run(
-            user.id,
-            user.tenant_id,
-            user.email,
-            user.name,
-            user.role,
-            user.status,
-            user.created_at || new Date().toISOString(),
-            user.updated_at || new Date().toISOString()
-          );
-        });
-      }
-
-      if (data?.assistants) {
-        const insertAssistant = db.prepare(`
-          INSERT INTO assistants (id, tenant_id, name, description, voice_id, model, prompt_template, status, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-        data.assistants.forEach((assistant: any) => {
-          insertAssistant.run(
-            assistant.id,
-            assistant.tenant_id,
-            assistant.name,
-            assistant.description || '',
-            assistant.voice_id || 'default',
-            assistant.model || 'gpt-4o',
-            assistant.prompt_template || '',
-            assistant.status,
-            assistant.created_at || new Date().toISOString(),
-            assistant.updated_at || new Date().toISOString()
-          );
-        });
-      }
-
-      if (data?.sessions) {
-        const insertSession = db.prepare(`
-          INSERT INTO sessions (id, tenant_id, assistant_id, user_id, status, context, started_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-        data.sessions.forEach((session: any) => {
-          insertSession.run(
-            session.id,
-            session.tenant_id,
-            session.assistant_id,
-            session.user_id,
-            session.status,
-            typeof session.context === 'string' ? session.context : JSON.stringify(session.context),
-            session.started_at || new Date().toISOString(),
-            session.updated_at || new Date().toISOString()
-          );
-        });
-      }
-
-      if (data?.messages) {
-        const insertMessage = db.prepare(`
-          INSERT INTO messages (id, session_id, role, content, audio_url, created_at)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `);
-        data.messages.forEach((message: any) => {
-          insertMessage.run(
-            message.id,
-            message.session_id,
-            message.role,
-            message.content,
-            message.audio_url,
-            message.created_at || new Date().toISOString()
-          );
-        });
-      }
-
-      if (data?.calls) {
-        const insertCall = db.prepare(`
-          INSERT INTO calls (id, tenant_id, session_id, assistant_id, direction, phone_number, status, duration_seconds, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-        data.calls.forEach((call: any) => {
-          insertCall.run(
-            call.id,
-            call.tenant_id,
-            call.session_id,
-            call.assistant_id,
-            call.direction,
-            call.phone_number,
-            call.status,
-            call.duration_seconds || 0,
-            call.created_at || new Date().toISOString(),
-            call.updated_at || new Date().toISOString()
-          );
-        });
-      }
+    getVoiceMailCount: () => {
+      const result = db.prepare('SELECT COUNT(*) as count FROM voice_mails').get() as { count: number };
+      return result.count;
     },
   };
 }
 
 /**
- * Initialize Cham.ai database schema for testing
+ * Initializes all Cham.ai database tables
+ * Used by integration tests
+ * Note: Tables are already created by createTestDatabase(), this is for backward compatibility
  */
 export function initChamAISchema(db: Database.Database): void {
+  // Tables are already created by createTestDatabase with indexes
+  // This function is kept for backward compatibility with tests
+  // The schemas are now idempotent (CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT EXISTS)
   db.exec(`
-    CREATE TABLE IF NOT EXISTS tenants (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      slug TEXT UNIQUE NOT NULL,
-      plan TEXT DEFAULT 'starter',
-      api_key TEXT UNIQUE NOT NULL,
-      status TEXT DEFAULT 'active',
-      settings TEXT DEFAULT '{}',
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      tenant_id TEXT NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      name TEXT NOT NULL,
-      role TEXT DEFAULT 'user',
-      status TEXT DEFAULT 'active',
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS assistants (
-      id TEXT PRIMARY KEY,
-      tenant_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      description TEXT,
-      voice_id TEXT DEFAULT 'default',
-      model TEXT DEFAULT 'gpt-4o',
-      prompt_template TEXT,
-      settings TEXT DEFAULT '{}',
-      status TEXT DEFAULT 'active',
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS sessions (
-      id TEXT PRIMARY KEY,
-      tenant_id TEXT NOT NULL,
-      assistant_id TEXT,
-      user_id TEXT,
-      status TEXT DEFAULT 'active',
-      context TEXT DEFAULT '{}',
-      started_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      ended_at TEXT,
-      FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
-      FOREIGN KEY (assistant_id) REFERENCES assistants(id) ON DELETE SET NULL,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS messages (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      role TEXT NOT NULL,
-      content TEXT,
-      audio_url TEXT,
-      metadata TEXT DEFAULT '{}',
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS calls (
-      id TEXT PRIMARY KEY,
-      tenant_id TEXT NOT NULL,
-      session_id TEXT,
-      assistant_id TEXT NOT NULL,
-      direction TEXT DEFAULT 'inbound',
-      phone_number TEXT NOT NULL,
-      status TEXT DEFAULT 'ringing',
-      duration_seconds INTEGER DEFAULT 0,
-      recording_url TEXT,
-      transcription TEXT,
-      metadata TEXT DEFAULT '{}',
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
-      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL,
-      FOREIGN KEY (assistant_id) REFERENCES assistants(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS usage_logs (
-      id TEXT PRIMARY KEY,
-      tenant_id TEXT NOT NULL,
-      session_id TEXT,
-      metric TEXT NOT NULL,
-      value REAL NOT NULL,
-      unit TEXT,
-      metadata TEXT DEFAULT '{}',
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
-      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS knowledge_base (
-      id TEXT PRIMARY KEY,
-      tenant_id TEXT NOT NULL,
-      title TEXT NOT NULL,
-      content TEXT NOT NULL,
-      category TEXT,
-      tags TEXT DEFAULT '[]',
-      embedding BLOB,
-      metadata TEXT DEFAULT '{}',
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS webhooks (
-      id TEXT PRIMARY KEY,
-      tenant_id TEXT NOT NULL,
-      url TEXT NOT NULL,
-      events TEXT NOT NULL,
-      secret TEXT,
-      status TEXT DEFAULT 'active',
-      last_triggered_at TEXT,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS audit_log (
-      id TEXT PRIMARY KEY,
-      tenant_id TEXT NOT NULL,
-      user_id TEXT,
-      entity_type TEXT NOT NULL,
-      entity_id TEXT NOT NULL,
-      action TEXT NOT NULL,
-      changes TEXT DEFAULT '{}',
-      ip_address TEXT,
-      user_agent TEXT,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
-    );
-
-    -- Create indexes for better query performance
-    CREATE INDEX IF NOT EXISTS idx_sessions_tenant ON sessions(tenant_id);
-    CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
-    CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
-    CREATE INDEX IF NOT EXISTS idx_calls_tenant ON calls(tenant_id);
-    CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status);
-    CREATE INDEX IF NOT EXISTS idx_usage_tenant_metric ON usage_logs(tenant_id, metric);
-    CREATE INDEX IF NOT EXISTS idx_kb_tenant ON knowledge_base(tenant_id);
+    ${CALLS_TABLE_SCHEMA}
+    ${VOICE_MAILS_TABLE_SCHEMA}
+    ${SESSIONS_TABLE_SCHEMA}
+    ${MESSAGES_TABLE_SCHEMA}
+    ${ASSISTANTS_TABLE_SCHEMA}
+    ${KNOWLEDGE_BASE_TABLE_SCHEMA}
+    ${WEBHOOKS_TABLE_SCHEMA}
   `);
+}
+
+/**
+ * Creates a test call
+ */
+export function createTestCall(overrides: any = {}): any {
+  return {
+    id: 'call_test_123',
+    tenant_id: 'tenant_test_123',
+    from_number: '+15551234567',
+    to_number: '+15559876543',
+    direction: 'inbound',
+    status: 'ended',
+    duration: 120,
+    transcription: '',
+    ...overrides,
+  };
+}
+
+/**
+ * Creates a test voice mail
+ */
+export function createTestVoiceMail(overrides: any = {}): any {
+  return {
+    id: 'vm_test_123',
+    tenant_id: 'tenant_test_123',
+    from_number: '+15551234567',
+    duration: 60,
+    transcription: 'Hello, this is a test.',
+    ...overrides,
+  };
 }
