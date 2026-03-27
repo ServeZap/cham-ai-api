@@ -6,12 +6,44 @@
 
 import { BaseRepository } from './base.js';
 
+/**
+ * Parse ADMIN_EMAILS env var into a Set of lowercase emails.
+ * God admins bypass ALL permission checks — no DB lookup needed.
+ */
+export function getGodAdmins(): Set<string> {
+  const raw = process.env.ADMIN_EMAILS || '';
+  return new Set(
+    raw
+      .split(',')
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
+/**
+ * Check if an email is a god admin (no DB round-trip).
+ * Can be used from any route without needing the repository instance.
+ */
+export function isGodAdminEmail(email?: string | null): boolean {
+  if (!email) return false;
+  return getGodAdmins().has(email.toLowerCase());
+}
+
 export class AdminRepository extends BaseRepository {
-  async isAdmin(userId: string): Promise<boolean> {
+  /**
+   * Check if user is admin.
+   * God admins (ADMIN_EMAILS env) are always admin regardless of DB state.
+   */
+  async isAdmin(userIdOrEmail: string): Promise<boolean> {
+    // God admin check — by email or by userId
+    if (getGodAdmins().has(userIdOrEmail.toLowerCase())) {
+      return true;
+    }
+
     const result = await this.queryOne<{ role: string }>(
       `SELECT role FROM user_roles
        WHERE user_id = $1 AND role = 'admin'`,
-      [userId]
+      [userIdOrEmail]
     );
     return !!result;
   }

@@ -11,6 +11,7 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { getTenantId } from '../hooks/auth.js';
+import { isGodAdminEmail } from '../../services/repositories/admin.repository.js';
 
 // ── Schemas ──────────────────────────────────────────────────────
 
@@ -81,8 +82,9 @@ export async function storageRoutes(fastify: FastifyInstance) {
     // Get tenant_id from JWT to enforce isolation
     const jwtPayload = (request as any).user || {};
     const tenantId = getTenantId(jwtPayload);
+    const godAdmin = isGodAdminEmail(jwtPayload.email);
 
-    if (!tenantId) {
+    if (!tenantId && !godAdmin) {
       return reply.status(403).send({
         error: 'Tenant ID not found in token',
         code: 'TENANT_NOT_FOUND',
@@ -90,8 +92,9 @@ export async function storageRoutes(fastify: FastifyInstance) {
     }
 
     // Security: path must start with the user's tenant_id
+    // God admins bypass tenant isolation
     const normalizedPath = path.replace(/^\/+/, '');
-    if (!normalizedPath.startsWith(tenantId)) {
+    if (!godAdmin && tenantId && !normalizedPath.startsWith(tenantId)) {
       return reply.status(403).send({
         error: 'Access denied — path does not belong to your tenant',
         code: 'FORBIDDEN',
@@ -118,8 +121,9 @@ export async function storageRoutes(fastify: FastifyInstance) {
     // Get tenant_id from JWT to enforce isolation
     const jwtPayload = (request as any).user || {};
     const tenantId = getTenantId(jwtPayload);
+    const godAdmin = isGodAdminEmail(jwtPayload.email);
 
-    if (!tenantId) {
+    if (!tenantId && !godAdmin) {
       return reply.status(403).send({
         error: 'Tenant ID not found in token',
         code: 'TENANT_NOT_FOUND',
@@ -127,9 +131,10 @@ export async function storageRoutes(fastify: FastifyInstance) {
     }
 
     // Validate all paths belong to this tenant
+    // God admins bypass tenant isolation
     for (const rawPath of paths) {
       const normalizedPath = rawPath.replace(/^\/+/, '');
-      if (!normalizedPath.startsWith(tenantId)) {
+      if (!godAdmin && tenantId && !normalizedPath.startsWith(tenantId)) {
         return reply.status(403).send({
           error: 'Access denied — path does not belong to your tenant',
           code: 'FORBIDDEN',

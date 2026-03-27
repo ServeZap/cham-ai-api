@@ -26,6 +26,7 @@ describe('Storage Routes', () => {
     // Set env vars for storage
     process.env.SUPABASE_URL = 'https://test.supabase.co';
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key';
+    process.env.ADMIN_EMAILS = 'hector.eng@gmail.com';
 
     await storageRoutes(mockFastify);
   });
@@ -136,6 +137,25 @@ describe('Storage Routes', () => {
 
       expect(mockReply.status).toHaveBeenCalledWith(500);
     });
+
+    it('god admin bypasses tenant isolation for signed URL', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ signed_url: 'https://god-signed' }),
+      });
+
+      const result = await handler(
+        {
+          body: { path: 'other-tenant/audio.wav', expiresIn: 3600 },
+          user: { email: 'hector.eng@gmail.com' },
+          log: { error: vi.fn() },
+        },
+        mockReply
+      );
+
+      expect(result.signedUrl).toBe('https://god-signed');
+      expect(mockReply.status).not.toHaveBeenCalled();
+    });
   });
 
   // ── POST /signed-urls (batch) ──────────────────────────────────
@@ -212,6 +232,25 @@ describe('Storage Routes', () => {
       expect(result.signedUrls).toHaveLength(2);
       expect(result.signedUrls[0].signedUrl).toBe('https://ok');
       expect(result.signedUrls[1].signedUrl).toBeNull();
+    });
+
+    it('god admin bypasses tenant isolation for batch signed URLs', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ signed_url: 'https://a' }) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ signed_url: 'https://b' }) });
+
+      const result = await handler(
+        {
+          body: { paths: ['tenant-x/a.wav', 'tenant-y/b.wav'], expiresIn: 3600 },
+          user: { email: 'hector.eng@gmail.com' },
+          log: { error: vi.fn() },
+        },
+        mockReply
+      );
+
+      expect(result.signedUrls).toHaveLength(2);
+      expect(result.signedUrls[0].signedUrl).toBe('https://a');
+      expect(result.signedUrls[1].signedUrl).toBe('https://b');
     });
   });
 });

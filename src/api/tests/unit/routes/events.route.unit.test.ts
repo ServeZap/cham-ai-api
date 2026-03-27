@@ -7,6 +7,7 @@ describe('Events Routes', () => {
   let getHandlers: any[];
 
   beforeEach(async () => {
+    process.env.ADMIN_EMAILS = 'hector.eng@gmail.com';
     getHandlers = [];
     mockFastify = {
       get: vi.fn((path, handler) => {
@@ -111,6 +112,25 @@ describe('Events Routes', () => {
 
       expect(mockFastify.eventBus.subscribe).toHaveBeenCalledWith(
         'cham-ai:calls:t1',
+        expect.any(Function)
+      );
+    });
+
+    it('god admin bypasses tenant isolation', async () => {
+      await handler(
+        {
+          query: { tenant: 'other-tenant' },
+          user: { email: 'hector.eng@gmail.com', app_metadata: { tenant_id: 't1' } },
+          raw: { on: vi.fn() },
+        },
+        mockReply
+      );
+
+      expect(mockReply.raw.writeHead).toHaveBeenCalledWith(200, expect.objectContaining({
+        'Content-Type': 'text/event-stream',
+      }));
+      expect(mockFastify.eventBus.subscribe).toHaveBeenCalledWith(
+        'cham-ai:calls:other-tenant',
         expect.any(Function)
       );
     });

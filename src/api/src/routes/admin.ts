@@ -11,6 +11,7 @@
 
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { isGodAdminEmail } from '../../services/repositories/admin.repository.js';
 
 const GenerateApiKeySchema = z.object({
   label: z.string().min(1).default('AI Agent'),
@@ -21,7 +22,13 @@ export async function adminRoutes(fastify: FastifyInstance) {
   fastify.get('/is-admin', async (request, reply) => {
     const jwtPayload = (request as any).user || {};
     const userId = jwtPayload.sub;
+    const email = jwtPayload.email;
     const repo = (fastify as any).repositories.admin;
+
+    // God admin check (email-based, no DB needed)
+    if (isGodAdminEmail(email)) {
+      return { is_admin: true, god: true };
+    }
 
     const isAdmin = await repo.isAdmin(userId);
     return { is_admin: isAdmin };
@@ -31,10 +38,10 @@ export async function adminRoutes(fastify: FastifyInstance) {
   fastify.get('/overview', async (request, reply) => {
     const jwtPayload = (request as any).user || {};
     const userId = jwtPayload.sub;
+    const email = jwtPayload.email;
     const repo = (fastify as any).repositories.admin;
 
-    const isAdmin = await repo.isAdmin(userId);
-    if (!isAdmin) {
+    if (!isGodAdminEmail(email) && !(await repo.isAdmin(userId))) {
       return reply.status(403).send({ error: 'Forbidden', code: 'FORBIDDEN' });
     }
 
@@ -46,10 +53,10 @@ export async function adminRoutes(fastify: FastifyInstance) {
   fastify.get('/users', async (request, reply) => {
     const jwtPayload = (request as any).user || {};
     const userId = jwtPayload.sub;
+    const email = jwtPayload.email;
     const repo = (fastify as any).repositories.admin;
 
-    const isAdmin = await repo.isAdmin(userId);
-    if (!isAdmin) {
+    if (!isGodAdminEmail(email) && !(await repo.isAdmin(userId))) {
       return reply.status(403).send({ error: 'Forbidden', code: 'FORBIDDEN' });
     }
 
@@ -61,10 +68,10 @@ export async function adminRoutes(fastify: FastifyInstance) {
   fastify.post('/api-keys', async (request, reply) => {
     const jwtPayload = (request as any).user || {};
     const userId = jwtPayload.sub;
+    const email = jwtPayload.email;
     const repo = (fastify as any).repositories.admin;
 
-    const isAdmin = await repo.isAdmin(userId);
-    if (!isAdmin) {
+    if (!isGodAdminEmail(email) && !(await repo.isAdmin(userId))) {
       return reply.status(403).send({ error: 'Forbidden', code: 'FORBIDDEN' });
     }
 

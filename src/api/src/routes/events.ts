@@ -14,6 +14,7 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { CallEvent } from '../services/event-bus.js';
+import { isGodAdminEmail } from '../../services/repositories/admin.repository.js';
 
 export async function eventsRoutes(fastify: FastifyInstance) {
   fastify.get('/', async (request, reply) => {
@@ -24,10 +25,12 @@ export async function eventsRoutes(fastify: FastifyInstance) {
 
     const jwtPayload = (request as any).user || {};
     const tenantId = query.tenant;
+    const email = jwtPayload.email;
 
     // Security: user can only subscribe to their own tenant's events
+    // God admins bypass tenant isolation
     const userTenantId = jwtPayload.app_metadata?.tenant_id;
-    if (userTenantId && userTenantId !== tenantId) {
+    if (!isGodAdminEmail(email) && userTenantId && userTenantId !== tenantId) {
       return reply.status(403).send({
         error: 'Cannot subscribe to events for another tenant',
         code: 'FORBIDDEN',
