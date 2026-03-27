@@ -26,6 +26,7 @@ import { providersRoutes } from './routes/providers.js';
 import { observabilityRoutes } from './routes/observability.js';
 import { missionsRoutes } from './routes/missions.js';
 import { adminRoutes } from './routes/admin.js';
+import { storageRoutes } from './routes/storage.js';
 
 import { errorHandler } from './handlers/error.js';
 import { authHook } from './hooks/auth.js';
@@ -122,6 +123,7 @@ export async function createServer() {
   await server.register(observabilityRoutes, { prefix: '/api/v1/observability' });
   await server.register(missionsRoutes, { prefix: '/api/v1/missions' });
   await server.register(adminRoutes, { prefix: '/api/v1/admin' });
+  await server.register(storageRoutes, { prefix: '/api/v1/storage' });
 
   // Error handler
   server.setErrorHandler(errorHandler);
