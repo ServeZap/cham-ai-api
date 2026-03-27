@@ -39,6 +39,14 @@ const OverviewSchema = z.object({
   until: z.string().optional(),
 });
 
+const TranscriptSchema = z.object({
+  call_id: z.string().min(1),
+  transcript_text: z.string().min(1),
+  language: z.string().optional(),
+  segments: z.any().optional(),
+  confidence: z.number().nullable().optional(),
+});
+
 export async function callsRoutes(fastify: FastifyInstance) {
   // Handle inbound call (webhook from Twilio/Vonage)
   fastify.post('/inbound', async (request, reply) => {
@@ -174,5 +182,21 @@ export async function callsRoutes(fastify: FastifyInstance) {
       error: 'Recording not found',
       code: 'RECORDING_NOT_FOUND',
     });
+  });
+
+  // Save transcript for a call
+  fastify.post('/transcripts', async (request, reply) => {
+    const data = TranscriptSchema.parse(request.body);
+    const db = (fastify as any).pg;
+
+    const result = await db.query(
+      `INSERT INTO transcripts (call_id, transcript_text, language, segments, confidence)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, call_id, created_at`,
+      [data.call_id, data.transcript_text, data.language || null, data.segments ? JSON.stringify(data.segments) : null, data.confidence ?? null]
+    );
+
+    const row = result.rows[0];
+    return reply.status(201).send(row);
   });
 }

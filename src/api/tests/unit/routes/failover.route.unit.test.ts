@@ -1,0 +1,117 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { failoverRoutes } from '../../../src/routes/failover.js';
+
+describe('Failover Routes', () => {
+  let mockFastify: any;
+  let getHandlers: any[];
+  let postHandlers: any[];
+  let patchHandlers: any[];
+  let deleteHandlers: any[];
+
+  beforeEach(async () => {
+    getHandlers = [];
+    postHandlers = [];
+    patchHandlers = [];
+    deleteHandlers = [];
+    mockFastify = {
+      get: vi.fn((path, handler) => { getHandlers.push({ path, handler }); }),
+      post: vi.fn((path, handler) => { postHandlers.push({ path, handler }); }),
+      patch: vi.fn((path, handler) => { patchHandlers.push({ path, handler }); }),
+      delete: vi.fn((path, handler) => { deleteHandlers.push({ path, handler }); }),
+      repositories: {
+        failover: {
+          findConfigs: vi.fn().mockResolvedValue([
+            { id: '1', channel: 'webhook', target: 'https://hooks.example.com', enabled: true, created_at: '2024-01-01', updated_at: '2024-01-01' },
+          ]),
+          findLogs: vi.fn().mockResolvedValue([
+            { id: '1', provider_type: 'stt', failed_provider: 'whisper', active_provider: 'deepgram', triggered_at: '2024-01-01T00:00:00Z', failover_chain: ['whisper', 'deepgram'], failed_providers: [{ name: 'whisper', reason: 'timeout' }], gpu_failure: false, action_path: null, notifications_sent: [] },
+          ]),
+          insertConfig: vi.fn().mockResolvedValue({ id: '2', channel: 'email', target: 'ops@test.com', enabled: true }),
+          toggleConfig: vi.fn().mockResolvedValue(undefined),
+          deleteConfig: vi.fn().mockResolvedValue(true),
+        },
+      },
+    };
+
+    await failoverRoutes(mockFastify);
+  });
+
+  describe('GET /configs', () => {
+    it('returns list of notification configs', async () => {
+      const handler = getHandlers.find((h) => h.path === '/configs')?.handler;
+      const result = await handler({}, {});
+
+      expect(result.configs).toHaveLength(1);
+      expect(result.configs[0].channel).toBe('webhook');
+    });
+  });
+
+  describe('GET /logs', () => {
+    it('returns list of failover logs', async () => {
+      const handler = getHandlers.find((h) => h.path === '/logs')?.handler;
+      const result = await handler({ query: {} }, {});
+
+      expect(result.logs).toHaveLength(1);
+      expect(result.logs[0].failed_provider).toBe('whisper');
+    });
+
+    it('accepts limit parameter', async () => {
+      const handler = getHandlers.find((h) => h.path === '/logs')?.handler;
+      await handler({ query: { limit: '10' } }, {});
+
+      expect(mockFastify.repositories.failover.findLogs).toHaveBeenCalledWith(10);
+    });
+  });
+
+  describe('POST /configs', () => {
+    it('creates a new notification config', async () => {
+      const handler = postHandlers.find((h) => h.path === '/configs')?.handler;
+      const mockReply = { status: vi.fn().mockReturnThis(), send: vi.fn() };
+
+      await handler(
+        { body: { channel: 'email', target: 'ops@test.com', enabled: true } },
+        mockReply
+      );
+
+      expect(mockFastify.repositories.failover.insertConfig).toHaveBeenCalledWith({
+        channel: 'email',
+        target: 'ops@test.com',
+        enabled: true,
+      });
+      expect(mockReply.status).toHaveBeenCalledWith(201);
+    });
+
+    it('rejects missing channel', async () => {
+      const handler = postHandlers.find((h) => h.path === '/configs')?.handler;
+      await expect(
+        handler({ body: { target: 'https://example.com' } }, {})
+      ).rejects.toThrow();
+    });
+  });
+
+  describe('PATCH /configs/:id', () => {
+    it('toggles config enabled state', async () => {
+      const handler = patchHandlers.find((h) => h.path === '/configs/:id')?.handler;
+      const result = await handler(
+        { params: { id: '1' }, body: { enabled: false } },
+        {}
+      );
+
+      expect(mockFastify.repositories.failover.toggleConfig).toHaveBeenCalledWith('1', false);
+      expect(result).toEqual({ id: '1', enabled: false });
+    });
+  });
+
+  describe('DELETE /configs/:id', () => {
+    it('deletes a config', async () => {
+      const handler = deleteHandlers.find((h) => h.path === '/configs/:id')?.handler;
+      const result = await handler(
+        { params: { id: '1' } },
+        {}
+      );
+
+      expect(mockFastify.repositories.failover.deleteConfig).toHaveBeenCalledWith('1');
+      expect(result.deleted).toBe(true);
+    });
+  });
+});

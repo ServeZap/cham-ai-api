@@ -18,6 +18,7 @@ export const authConfig = {
     '/docs',
     '/api/v1/calls/inbound', // Twilio webhook
     '/api/v1/voice/converse', // Public conversational endpoint
+    '/api/v1/demo/requests', // Landing page demo request (public)
   ],
 };
 
