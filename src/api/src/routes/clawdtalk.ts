@@ -1,28 +1,11 @@
 /**
  * ClawdTalk Integration Routes
  *
- * WebSocket-based voice calling integration with ClawdTalk
- * Architecture: ClawdTalk <-> WebSocket <-> Cham.ai AI
+ * WebSocket-based voice calling integration with ClawdTalk.
+ * Uses real OpenAI for AI responses and Redis for active call state.
  *
  * @route WS /api/v1/clawdtalk/webhook  - Main WebSocket endpoint
  * @route GET /api/v1/clawdtalk/status  - Health check
- *
- * ClawdTalk Message Format (Incoming):
- * {
- *   "call_id": "string",
- *   "text": "string",           // User speech transcribed
- *   "timestamp": "string",
- *   "sequence": number,
- *   "event": "start|speech|end"
- * }
- *
- * ClawdTalk Response Format (Outgoing):
- * {
- *   "type": "response",
- *   "call_id": "string",
- *   "text": "string",           // AI response to speak
- *   "sequence": number          // Echo incoming sequence
- * }
  */
 
 import { FastifyInstance } from 'fastify';
@@ -36,53 +19,49 @@ const ClawdTalkEventSchema = z.object({
   sequence: z.number(),
   event: z.enum(['start', 'speech', 'end', 'error', 'hangup']),
   pin_verified: z.boolean().optional(),
+  token: z.string().optional(), // Auth token (first message)
 });
 
 // Response to ClawdTalk
 interface ClawdTalkResponse {
-  type: 'response' | 'error' | 'hangup';
+  type: 'response' | 'error' | 'hangup' | 'connected';
   call_id: string;
   text?: string;
   sequence?: number;
   error?: string;
+  timestamp?: string;
 }
-
-// Active calls storage (in production, use Redis)
-const activeCalls = new Map<string, {
-  startTime: Date;
-  lastActivity: Date;
-  session_id?: string;
-  assistant_id?: string;
-  messages: Array<{ role: string; content: string }>;
-}>();
-
-// Clean up calls older than 1 hour
-setInterval(() => {
-  const oneHourAgo = Date.now() - 60 * 60 * 1000;
-  for (const [callId, call] of activeCalls.entries()) {
-    if (call.lastActivity.getTime() < oneHourAgo) {
-      activeCalls.delete(callId);
-    }
-  }
-}, 5 * 60 * 1000); // Check every 5 minutes
 
 export async function clawdTalkRoutes(fastify: FastifyInstance) {
   // Health check endpoint
   fastify.get('/status', async () => {
+    const redis = (fastify as any).redis;
+    let activeCalls = 0;
+
+    if (redis) {
+      try {
+        const keys = await redis.keys('clawdtalk:call:*');
+        activeCalls = keys.length;
+      } catch {
+        // Redis unavailable
+      }
+    }
+
     return {
       service: 'clawdtalk-integration',
       status: 'operational',
-      active_calls: activeCalls.size,
+      active_calls: activeCalls,
       timestamp: new Date().toISOString(),
     };
   });
 
   // Main WebSocket endpoint for ClawdTalk
-  fastify.register(async function (fastify: FastifyInstance) {
-    fastify.get('/webhook', { websocket: true }, (connection, req) => {
+  fastify.register(async function (wsFastify: FastifyInstance) {
+    wsFastify.get('/webhook', { websocket: true }, (connection: any, req: any) => {
+      let authenticated = false;
+
       fastify.log.info('[ClawdTalk] WebSocket connection established');
 
-      // Send connection acknowledgment
       connection.socket.send(JSON.stringify({
         type: 'connected',
         timestamp: new Date().toISOString(),
@@ -95,25 +74,41 @@ export async function clawdTalkRoutes(fastify: FastifyInstance) {
 
           const event = ClawdTalkEventSchema.parse(JSON.parse(rawMessage));
 
-          // Update activity timestamp
-          if (activeCalls.has(event.call_id)) {
-            const call = activeCalls.get(event.call_id)!;
-            call.lastActivity = new Date();
+          // Auth: first message must contain token (unless skipPaths)
+          if (!authenticated && event.event === 'start' && event.token) {
+            try {
+              await (fastify as any).jwt.verify(event.token);
+              authenticated = true;
+            } catch {
+              connection.socket.send(JSON.stringify({
+                type: 'error',
+                call_id: event.call_id,
+                error: 'Authentication failed',
+              }));
+              return;
+            }
           }
 
           // Handle different event types
           switch (event.event) {
             case 'start': {
-              // New call initiated
               fastify.log.info(`[ClawdTalk] Call started: ${event.call_id}`);
 
-              activeCalls.set(event.call_id, {
-                startTime: new Date(),
-                lastActivity: new Date(),
-                messages: [],
-              });
+              // Store in Redis if available
+              const redis = (fastify as any).redis;
+              if (redis) {
+                await redis.set(
+                  `clawdtalk:call:${event.call_id}`,
+                  JSON.stringify({
+                    startTime: new Date().toISOString(),
+                    lastActivity: new Date().toISOString(),
+                    messages: [],
+                  }),
+                  'EX',
+                  3600
+                );
+              }
 
-              // Send greeting
               const response: ClawdTalkResponse = {
                 type: 'response',
                 call_id: event.call_id,
@@ -125,34 +120,38 @@ export async function clawdTalkRoutes(fastify: FastifyInstance) {
             }
 
             case 'speech': {
-              // User spoke something
               if (!event.text) {
                 fastify.log.warn(`[ClawdTalk] Speech event without text: ${event.call_id}`);
                 break;
               }
 
-              const call = activeCalls.get(event.call_id);
-              if (!call) {
-                fastify.log.warn(`[ClawdTalk] Speech from unknown call: ${event.call_id}`);
-                break;
+              // Process with AI (real OpenAI)
+              const aiResponse = await processAIResponse(fastify, event.call_id, event.text);
+
+              // Update Redis
+              const redis = (fastify as any).redis;
+              if (redis) {
+                try {
+                  const callData = await redis.get(`clawdtalk:call:${event.call_id}`);
+                  if (callData) {
+                    const parsed = JSON.parse(callData);
+                    parsed.messages.push(
+                      { role: 'user', content: event.text },
+                      { role: 'assistant', content: aiResponse }
+                    );
+                    parsed.lastActivity = new Date().toISOString();
+                    await redis.set(
+                      `clawdtalk:call:${event.call_id}`,
+                      JSON.stringify(parsed),
+                      'EX',
+                      3600
+                    );
+                  }
+                } catch {
+                  // Redis update failed
+                }
               }
 
-              // Add user message to history
-              call.messages.push({
-                role: 'user',
-                content: event.text,
-              });
-
-              // Process with AI
-              const aiResponse = await processAIResponse(call.messages);
-
-              // Add assistant response to history
-              call.messages.push({
-                role: 'assistant',
-                content: aiResponse,
-              });
-
-              // Send response to ClawdTalk
               const response: ClawdTalkResponse = {
                 type: 'response',
                 call_id: event.call_id,
@@ -165,9 +164,13 @@ export async function clawdTalkRoutes(fastify: FastifyInstance) {
 
             case 'end':
             case 'hangup': {
-              // Call ended
               fastify.log.info(`[ClawdTalk] Call ended: ${event.call_id}`);
-              activeCalls.delete(event.call_id);
+
+              // Clean up Redis
+              const redis = (fastify as any).redis;
+              if (redis) {
+                await redis.del(`clawdtalk:call:${event.call_id}`);
+              }
               break;
             }
 
@@ -182,8 +185,8 @@ export async function clawdTalkRoutes(fastify: FastifyInstance) {
               break;
             }
           }
-        } catch (error) {
-          fastify.log.error(`[ClawdTalk] Error processing message:`, error);
+        } catch (err: any) {
+          fastify.log.error(`[ClawdTalk] Error processing message:`, err);
 
           const errorResponse: ClawdTalkResponse = {
             type: 'error',
@@ -198,51 +201,56 @@ export async function clawdTalkRoutes(fastify: FastifyInstance) {
         fastify.log.info('[ClawdTalk] WebSocket connection closed');
       });
 
-      connection.socket.on('error', (error) => {
-        fastify.log.error('[ClawdTalk] WebSocket error:', error);
+      connection.socket.on('error', (err: any) => {
+        fastify.log.error('[ClawdTalk] WebSocket error:', err);
       });
     });
   });
 }
 
 /**
- * Process conversation with AI
- * In production, this would call the actual AI service
+ * Process conversation with real OpenAI
  */
 async function processAIResponse(
-  messages: Array<{ role: string; content: string }>
+  fastify: FastifyInstance,
+  callId: string,
+  userText: string
 ): Promise<string> {
-  // TODO: Integrate with actual AI service
-  // For now, return a simple response based on the last user message
-
-  const lastMessage = messages[messages.length - 1];
-  if (!lastMessage || lastMessage.role !== 'user') {
-    return "I'm here to help. What would you like to know?";
+  if (!process.env.OPENAI_API_KEY) {
+    // Fallback pattern matching when no API key
+    const lower = userText.toLowerCase();
+    if (lower.includes('hello') || lower.includes('hi')) {
+      return 'Hello! Welcome to Cham.ai voice assistant. How can I assist you today?';
+    }
+    if (lower.includes('help')) {
+      return 'I can help you with various tasks. What would you like to do?';
+    }
+    if (lower.includes('bye') || lower.includes('goodbye')) {
+      return 'Goodbye! Thank you for calling Cham.ai. Have a great day!';
+    }
+    return 'I understand. Let me help you with that.';
   }
 
-  const userText = lastMessage.content.toLowerCase();
+  try {
+    const OpenAI = (await import('openai')).default;
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-  // Simple pattern matching for demo
-  if (userText.includes('hello') || userText.includes('hi')) {
-    return 'Hello! Welcome to Cham.ai voice assistant. How can I assist you today?';
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: 'Você é um assistente de voz profissional da Cham.ai. Responda de forma clara, concisa e amigável. Fale em português brasileiro.',
+        },
+        { role: 'user', content: userText },
+      ],
+      max_tokens: 100,
+      temperature: 0.7,
+    });
+
+    return completion.choices[0]?.message?.content || 'I understand. How can I help?';
+  } catch (err: any) {
+    fastify.log.error(`[ClawdTalk] OpenAI error for call ${callId}:`, err);
+    return 'I apologize, I am having technical difficulties. Please try again.';
   }
-
-  if (userText.includes('help')) {
-    return 'I can help you with various tasks. You can ask me questions, request information, or just have a conversation. What would you like to do?';
-  }
-
-  if (userText.includes('bye') || userText.includes('goodbye')) {
-    return 'Goodbye! Thank you for calling Cham.ai. Have a great day!';
-  }
-
-  if (userText.includes('time')) {
-    return `The current time is ${new Date().toLocaleTimeString()}`;
-  }
-
-  if (userText.includes('date')) {
-    return `Today is ${new Date().toLocaleDateString()}`;
-  }
-
-  // Default response
-  return 'I understand. Let me help you with that. Is there anything specific you would like to know or do?';
 }

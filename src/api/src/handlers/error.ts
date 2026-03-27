@@ -1,35 +1,81 @@
 /**
  * Error Handler - Cham.ai
  *
- * Uses shared error handler with Cham.ai-specific error codes.
- * Now includes V2 with enhanced features.
+ * Custom error handler with Cham.ai-specific error codes.
+ * No external shared package dependency.
  */
 
-import {
-  createErrorHandler,
-  ErrorCodeMap,
-  ValidationError,
-  NotFoundError,
-  UnauthorizedError,
-  ConflictError,
-} from '@servezap/shared/api/error-handler';
-
-import {
-  createErrorHandler as createErrorHandlerV2,
-  ForbiddenError,
-  InternalError,
-  ServiceUnavailableError,
-  ErrorHandlerOptions as ErrorHandlerOptionsV2,
-  getErrorCode,
-  isCustomError,
-} from '@servezap/shared/api/error-handler.v2';
 import { FastifyError, FastifyRequest, FastifyReply } from 'fastify';
+
+// ── Custom Error Classes ──────────────────────────────────────────
+
+export class AppError extends Error {
+  code: string;
+  statusCode: number;
+  details?: any;
+
+  constructor(message: string, code: string, statusCode: number, details?: any) {
+    super(message);
+    this.name = 'AppError';
+    this.code = code;
+    this.statusCode = statusCode;
+    this.details = details;
+  }
+}
+
+export class ValidationError extends AppError {
+  constructor(message = 'Validation Error', details?: any) {
+    super(message, 'VALIDATION_ERROR', 400, details);
+    this.name = 'ValidationError';
+  }
+}
+
+export class NotFoundError extends AppError {
+  constructor(resource: string, id: string) {
+    super(`${resource} not found`, 'NOT_FOUND', 404, { resource, id });
+    this.name = 'NotFoundError';
+  }
+}
+
+export class UnauthorizedError extends AppError {
+  constructor(message = 'Unauthorized') {
+    super(message, 'UNAUTHORIZED', 401);
+    this.name = 'UnauthorizedError';
+  }
+}
+
+export class ConflictError extends AppError {
+  constructor(message: string, details?: any) {
+    super(message, 'CONFLICT', 409, details);
+    this.name = 'ConflictError';
+  }
+}
+
+export class ForbiddenError extends AppError {
+  constructor(message = 'Forbidden') {
+    super(message, 'FORBIDDEN', 403);
+    this.name = 'ForbiddenError';
+  }
+}
+
+export class InternalError extends AppError {
+  constructor(message = 'Internal Server Error') {
+    super(message, 'INTERNAL_ERROR', 500);
+    this.name = 'InternalError';
+  }
+}
+
+export class ServiceUnavailableError extends AppError {
+  constructor(message = 'Service Unavailable') {
+    super(message, 'SERVICE_UNAVAILABLE', 503);
+    this.name = 'ServiceUnavailableError';
+  }
+}
 
 /**
  * Cham.ai specific error codes
  */
-export const CHAM_AI_ERROR_CODES: ErrorCodeMap = {
-  // Shared error codes
+export const CHAM_AI_ERROR_CODES: Record<string, number> = {
   VALIDATION_ERROR: 400,
   NOT_FOUND: 404,
   UNAUTHORIZED: 401,
@@ -37,8 +83,6 @@ export const CHAM_AI_ERROR_CODES: ErrorCodeMap = {
   CONFLICT: 409,
   INTERNAL_ERROR: 500,
   ALREADY_EXISTS: 409,
-
-  // Cham.ai specific error codes
   CALL_NOT_FOUND: 404,
   SESSION_NOT_FOUND: 404,
   RECORDING_NOT_FOUND: 404,
@@ -50,133 +94,7 @@ export const CHAM_AI_ERROR_CODES: ErrorCodeMap = {
   QUOTA_EXCEEDED: 429,
 };
 
-/**
- * Custom format response for Cham.ai
- * Matches legacy error handler API for test compatibility
- */
-function chamAiFormatResponse(
-  error: FastifyError,
-  statusCode: number
-): { error: string; code?: string; details?: any } {
-  // Determine error message and code
-  let errorMessage = error.message || 'An error occurred';
-  let errorCode = error.code;
-
-  // Handle validation errors
-  if (error.validation) {
-    errorMessage = 'Validation Error';
-    errorCode = 'VALIDATION_ERROR';
-  }
-  // Handle unknown errors (no code)
-  else if (!errorCode) {
-    if (statusCode === 500) {
-      errorCode = 'INTERNAL_ERROR';
-      errorMessage = 'Internal Server Error';
-    }
-  }
-
-  const response: any = {
-    error: errorMessage,
-  };
-
-  // Add code if available
-  if (errorCode) {
-    response.code = errorCode;
-  }
-
-  // Add details for validation errors
-  if (error.validation) {
-    response.details = error.validation;
-  }
-  // In development mode, for unknown errors, include original error message in details
-  else if (process.env.NODE_ENV === 'development' && !error.validation && error.message && statusCode === 500) {
-    response.details = error.message;
-  }
-
-  return response;
-}
-
-/**
- * Custom error handler that matches legacy logging behavior
- */
-export function createChamAiErrorHandler(options: {
-  skipLogPaths?: string[];
-} = {}) {
-  const baseHandler = createErrorHandler({
-    errorCodes: CHAM_AI_ERROR_CODES,
-    logErrors: false, // We'll handle logging ourselves
-    skipLogPaths: [],
-    formatResponse: chamAiFormatResponse,
-  });
-
-  return async function errorHandler(
-    this: any,
-    error: FastifyError,
-    request: FastifyRequest,
-    reply: FastifyReply
-  ) {
-    // Log error using legacy format (raw error object) unless it's a skip path
-    const shouldSkipLog = options.skipLogPaths?.some((path) =>
-      request.url?.startsWith(path)
-    );
-
-    if (!shouldSkipLog && request.log?.error) {
-      request.log.error(error);
-    }
-
-    // Call the base handler
-    return baseHandler.call(this, error, request, reply);
-  };
-}
-
-/**
- * V2 Error Handler with enhanced features
- * Use this for new code with better type safety and monitoring
- */
-export function createChamAiErrorHandlerV2(options: ErrorHandlerOptionsV2 = {}) {
-  return createErrorHandlerV2({
-    ...options,
-    errorCodes: CHAM_AI_ERROR_CODES,
-    redactSensitiveData: options.redactSensitiveData ?? true,
-    includeStackTrace: options.includeStackTrace ?? (process.env.NODE_ENV === 'development'),
-  });
-}
-
-/**
- * Create Cham.ai error handler
- */
-export const errorHandler = createChamAiErrorHandler({
-  skipLogPaths: ['/api/health', '/api/ready', '/api/metrics'],
-});
-
-/**
- * V2 Error Handler instance (enhanced version)
- */
-export const errorHandlerV2 = createChamAiErrorHandlerV2({
-  skipLogPaths: ['/api/health', '/api/ready', '/api/metrics'],
-  onError: (error, statusCode, request) => {
-    // Send metrics to monitoring system
-    if (process.env.NODE_ENV === 'production') {
-      // TODO: Send to Prometheus/DataDog
-      console.error(`[ERROR] ${statusCode} ${error.code}:`, error.message);
-    }
-  },
-});
-
-// Re-export shared errors for convenience
-export {
-  ValidationError,
-  NotFoundError,
-  UnauthorizedError,
-  ConflictError,
-  ForbiddenError,
-  InternalError,
-  ServiceUnavailableError,
-};
-
-/**
- * Cham.ai specific error classes
- */
+// ── Cham.ai specific errors ───────────────────────────────────────
 
 export class CallNotFoundError extends NotFoundError {
   constructor(callId: string) {
@@ -200,7 +118,7 @@ export class TranscriptionFailedError extends InternalError {
 }
 
 export class TwilioError extends ServiceUnavailableError {
-  constructor(message: string, twilioError?: any) {
+  constructor(message: string) {
     super(`Twilio error: ${message}`);
     this.code = 'TWILIO_ERROR';
   }
@@ -211,4 +129,51 @@ export class QuotaExceededError extends ConflictError {
     super(`${quotaType} quota exceeded (${current}/${limit})`, { quotaType, current, limit });
     this.code = 'QUOTA_EXCEEDED';
   }
+}
+
+// ── Error Handler ─────────────────────────────────────────────────
+
+function formatResponse(
+  error: FastifyError,
+  statusCode: number
+): { error: string; code?: string; details?: any } {
+  let errorMessage = error.message || 'An error occurred';
+  let errorCode = error.code;
+
+  // Handle validation errors
+  if (error.validation) {
+    errorMessage = 'Validation Error';
+    errorCode = 'VALIDATION_ERROR';
+  } else if (!errorCode) {
+    if (statusCode === 500) {
+      errorCode = 'INTERNAL_ERROR';
+      errorMessage = 'Internal Server Error';
+    }
+  }
+
+  const response: any = { error: errorMessage };
+  if (errorCode) response.code = errorCode;
+  if (error.validation) response.details = error.validation;
+  else if (process.env.NODE_ENV === 'development' && !error.validation && error.message && statusCode === 500) {
+    response.details = error.message;
+  }
+
+  return response;
+}
+
+export function errorHandler(
+  error: FastifyError,
+  request: FastifyRequest,
+  reply: FastifyReply
+) {
+  // Skip logging for health check paths
+  const skipLogPaths = ['/api/health', '/api/ready', '/api/metrics'];
+  if (!skipLogPaths.some((path) => request.url?.startsWith(path)) && request.log?.error) {
+    request.log.error(error);
+  }
+
+  const statusCode = error.statusCode || (error.validation ? 400 : CHAM_AI_ERROR_CODES[error.code as string]) || 500;
+  const response = formatResponse(error, statusCode);
+
+  reply.status(statusCode).send(response);
 }

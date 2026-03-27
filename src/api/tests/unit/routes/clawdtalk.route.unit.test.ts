@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { clawdTalkRoutes } from '../../../src/routes/clawdtalk.js';
-import { WebSocket } from 'ws';
 
 describe('ClawdTalk Routes', () => {
   let mockFastify: any;
@@ -20,7 +19,6 @@ describe('ClawdTalk Routes', () => {
     mockFastify = {
       get: vi.fn(),
       register: vi.fn((plugin: any) => {
-        // Simulate plugin registration
         if (typeof plugin === 'function') {
           plugin(mockFastify);
         }
@@ -30,6 +28,17 @@ describe('ClawdTalk Routes', () => {
         warn: vi.fn(),
         error: vi.fn(),
       },
+      // Add redis mock
+      redis: {
+        keys: vi.fn().mockResolvedValue([]),
+        get: vi.fn().mockResolvedValue(null),
+        set: vi.fn().mockResolvedValue('1'),
+        del: vi.fn().mockResolvedValue(1),
+      },
+      // Add jwt mock
+      jwt: {
+        verify: vi.fn(),
+      },
     };
   });
 
@@ -37,7 +46,6 @@ describe('ClawdTalk Routes', () => {
     it('should return service status', async () => {
       await clawdTalkRoutes(mockFastify);
 
-      // Find the status handler
       const statusCall = mockFastify.get.mock.calls.find(
         (call: any[]) => call[0] === '/status'
       );
@@ -49,7 +57,7 @@ describe('ClawdTalk Routes', () => {
       expect(result).toEqual({
         service: 'clawdtalk-integration',
         status: 'operational',
-        active_calls: expect.any(Number),
+        active_calls: 0,
         timestamp: expect.any(String),
       });
     });
@@ -77,13 +85,11 @@ describe('ClawdTalk Routes', () => {
     it('should send connection acknowledgment on connect', async () => {
       await clawdTalkRoutes(mockFastify);
 
-      // Simulate WebSocket connection
       const registerCall = mockFastify.register.mock.calls[0];
       const pluginFn = registerCall[0];
 
       await pluginFn(mockFastify);
 
-      // Get the websocket handler
       const wsCall = mockFastify.get.mock.calls.find(
         (call: any[]) => call[1]?.websocket === true
       );
@@ -93,8 +99,6 @@ describe('ClawdTalk Routes', () => {
     });
 
     it('should handle start event', async () => {
-      await clawdTalkRoutes(mockFastify);
-
       const startEvent = {
         call_id: 'call-123',
         text: '',
@@ -103,8 +107,6 @@ describe('ClawdTalk Routes', () => {
         event: 'start',
       };
 
-      // The handler should send a greeting
-      // This would be tested with actual WebSocket in integration tests
       expect(startEvent.call_id).toBe('call-123');
     });
 

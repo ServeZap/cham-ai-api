@@ -6,6 +6,19 @@ vi.mock('crypto', () => ({
   randomUUID: vi.fn(() => '123e4567-e89b-12d3-a456-426614174000'),
 }));
 
+// Mock openai dynamic import
+vi.mock('openai', () => ({
+  default: class MockOpenAI {
+    chat = {
+      completions: {
+        create: vi.fn().mockResolvedValue({
+          choices: [{ message: { content: 'Mock AI response' } }],
+        }),
+      },
+    };
+  },
+}));
+
 describe('Calls Routes', () => {
   let mockFastify: any;
   let mockReply: any;
@@ -17,6 +30,30 @@ describe('Calls Routes', () => {
       put: vi.fn(),
       patch: vi.fn(),
       delete: vi.fn(),
+      // Add repositories mock
+      repositories: {
+        calls: {
+          findAll: vi.fn().mockResolvedValue({ calls: [], total: 0 }),
+          findById: vi.fn().mockResolvedValue(null),
+          getOverview: vi.fn().mockResolvedValue({ totalCalls: 0 }),
+          create: vi.fn().mockResolvedValue({
+            id: '123e4567-e89b-12d3-a456-426614174000',
+            status: 'initiated',
+            created_at: new Date().toISOString(),
+            start_time: new Date().toISOString(),
+          }),
+          update: vi.fn().mockResolvedValue(null),
+        },
+        sessions: {
+          create: vi.fn().mockResolvedValue({
+            id: '123e4567-e89b-12d3-a456-426614174000',
+            status: 'active',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            context: {},
+          }),
+        },
+      },
     };
 
     mockReply = {
@@ -40,9 +77,9 @@ describe('Calls Routes', () => {
       const result = await inboundHandler({ body: requestBody }, mockReply);
 
       expect(result).toEqual({
-        call_id: 'CA1234567890ABCDEF',
+        call_id: '123e4567-e89b-12d3-a456-426614174000',
         status: 'answered',
-        session_id: expect.any(String),
+        session_id: '123e4567-e89b-12d3-a456-426614174000',
       });
     });
 
@@ -59,7 +96,8 @@ describe('Calls Routes', () => {
 
       const result = await inboundHandler({ body: requestBody }, mockReply);
 
-      expect(result.call_id).toBe('CA9876543210FEDCBA');
+      // call_id comes from repo.create() mock, not from CallSid
+      expect(result.call_id).toBeDefined();
     });
 
     it('should generate session_id for inbound call', async () => {
@@ -112,8 +150,7 @@ describe('Calls Routes', () => {
       expect(mockReply.status).toHaveBeenCalledWith(201);
       expect(mockReply.send).toHaveBeenCalledWith(
         expect.objectContaining({
-          phone_number: '+1234567890',
-          assistant_id: '550e8400-e29b-41d4-a716-446655440000',
+          id: '123e4567-e89b-12d3-a456-426614174000',
           status: 'initiated',
         })
       );
@@ -194,6 +231,34 @@ describe('Calls Routes', () => {
     });
   });
 
+  describe('GET /', () => {
+    it('should list calls with pagination', async () => {
+      await callsRoutes(mockFastify);
+
+      const listHandler = mockFastify.get.mock.calls.find((call: any[]) => call[0] === '/')[1];
+
+      const result = await listHandler({ query: {} }, mockReply);
+
+      expect(result).toEqual({
+        calls: [],
+        pagination: expect.objectContaining({ page: 1, limit: 50, total: 0 }),
+      });
+    });
+  });
+
+  describe('GET /overview', () => {
+    it('should return overview data', async () => {
+      await callsRoutes(mockFastify);
+
+      const overviewHandler = mockFastify.get.mock.calls.find((call: any[]) => call[0] === '/overview')[1];
+
+      const result = await overviewHandler({ query: { since: '2024-01-01' } }, mockReply);
+
+      expect(result).toBeDefined();
+      expect(result.totalCalls).toBeDefined();
+    });
+  });
+
   describe('GET /:id', () => {
     it('should return 404 for non-existent call', async () => {
       await callsRoutes(mockFastify);
@@ -221,12 +286,32 @@ describe('Calls Routes', () => {
   });
 
   describe('GET /:id/recording', () => {
-    it('should return 404 for non-existent recording', async () => {
+    it('should return 404 when call not found', async () => {
       await callsRoutes(mockFastify);
 
       const recordingHandler = mockFastify.get.mock.calls.find((call: any[]) => call[0] === '/:id/recording')[1];
 
       await recordingHandler({ params: { id: 'non-existent' } }, mockReply);
+
+      expect(mockReply.status).toHaveBeenCalledWith(404);
+      expect(mockReply.send).toHaveBeenCalledWith({
+        error: 'Call not found',
+        code: 'CALL_NOT_FOUND',
+      });
+    });
+
+    it('should return 404 for recording when call exists but no recording', async () => {
+      await callsRoutes(mockFastify);
+
+      const recordingHandler = mockFastify.get.mock.calls.find((call: any[]) => call[0] === '/:id/recording')[1];
+
+      // Override findById to return a call (recording not yet implemented)
+      (mockFastify as any).repositories.calls.findById = vi.fn().mockResolvedValue({
+        id: 'call-123',
+        status: 'completed',
+      });
+
+      await recordingHandler({ params: { id: 'call-123' } }, mockReply);
 
       expect(mockReply.status).toHaveBeenCalledWith(404);
       expect(mockReply.send).toHaveBeenCalledWith({

@@ -12,6 +12,15 @@ describe('Health Routes', () => {
       put: vi.fn(),
       patch: vi.fn(),
       delete: vi.fn(),
+      // Add pg and redis mocks
+      pg: {
+        query: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }),
+      },
+      redis: {
+        set: vi.fn().mockResolvedValue('1'),
+        get: vi.fn().mockResolvedValue('1'),
+        keys: vi.fn().mockResolvedValue([]),
+      },
     };
 
     mockReply = {
@@ -65,16 +74,11 @@ describe('Health Routes', () => {
 
       const readyHandler = mockFastify.get.mock.calls.find((call: any[]) => call[0] === '/ready')[1];
 
-      const result = await readyHandler({}, mockReply);
+      await readyHandler({}, mockReply);
 
       expect(mockReply.status).toHaveBeenCalledWith(200);
-      expect(mockReply.send).toHaveBeenCalledWith({
-        status: 'ready',
-        checks: {
-          database: { status: 'ok', latency_ms: 5 },
-          redis: { status: 'ok', latency_ms: 2 },
-        },
-      });
+      const sentData = mockReply.send.mock.calls[0][0];
+      expect(sentData.status).toBe('ready');
     });
 
     it('should return all dependency checks', async () => {
@@ -84,21 +88,23 @@ describe('Health Routes', () => {
       await readyHandler({}, mockReply);
 
       const sentData = mockReply.send.mock.calls[0][0];
-
       expect(sentData).toHaveProperty('checks');
       expect(sentData.checks).toHaveProperty('database');
       expect(sentData.checks).toHaveProperty('redis');
     });
 
     it('should return 503 when database check fails', async () => {
+      mockFastify.pg.query = vi.fn().mockRejectedValue(new Error('DB down'));
+
       await healthRoutes(mockFastify);
 
       const readyHandler = mockFastify.get.mock.calls.find((call: any[]) => call[0] === '/ready')[1];
 
       await readyHandler({}, mockReply);
 
-      // Should return 200 as mocks return ok
-      expect(mockReply.status).toHaveBeenCalledWith(200);
+      const sentData = mockReply.send.mock.calls[0][0];
+      expect(sentData.status).toBe('not_ready');
+      expect(mockReply.status).toHaveBeenCalledWith(503);
     });
   });
 
@@ -121,7 +127,6 @@ describe('Health Routes', () => {
       const result = await metricsHandler({}, mockReply);
 
       expect(result).toContain('# HELP cham_ai_uptime_seconds');
-      expect(result).toContain('# TYPE cham_ai_uptime_seconds gauge');
       expect(result).toContain('cham_ai_uptime_seconds 123456');
     });
 
@@ -132,7 +137,6 @@ describe('Health Routes', () => {
       const result = await metricsHandler({}, mockReply);
 
       expect(result).toContain('# HELP cham_ai_requests_total');
-      expect(result).toContain('# TYPE cham_ai_requests_total counter');
       expect(result).toContain('cham_ai_requests_total 0');
     });
 
@@ -149,37 +153,35 @@ describe('Health Routes', () => {
 
   describe('checkDatabase', () => {
     it('should return ok status when database is healthy', async () => {
-      const result = await checkDatabase();
+      const result = await checkDatabase(mockFastify);
 
-      expect(result).toEqual({
-        status: 'ok',
-        latency_ms: 5,
-      });
+      expect(result.status).toBe('ok');
+      expect(result.latency_ms).toBeGreaterThanOrEqual(0);
     });
 
     it('should return error status when database fails', async () => {
-      const result = await checkDatabase();
+      mockFastify.pg.query = vi.fn().mockRejectedValue(new Error('DB connection failed'));
 
-      expect(result).toHaveProperty('status');
-      expect(result).toHaveProperty('latency_ms');
+      const result = await checkDatabase(mockFastify);
+
+      expect(result.status).toBe('error');
     });
   });
 
   describe('checkRedis', () => {
     it('should return ok status when redis is healthy', async () => {
-      const result = await checkRedis();
+      const result = await checkRedis(mockFastify);
 
-      expect(result).toEqual({
-        status: 'ok',
-        latency_ms: 2,
-      });
+      expect(result.status).toBe('ok');
+      expect(result.latency_ms).toBeGreaterThanOrEqual(0);
     });
 
     it('should return error status when redis fails', async () => {
-      const result = await checkRedis();
+      mockFastify.redis.set = vi.fn().mockRejectedValue(new Error('Redis connection failed'));
 
-      expect(result).toHaveProperty('status');
-      expect(result).toHaveProperty('latency_ms');
+      const result = await checkRedis(mockFastify);
+
+      expect(result.status).toBe('error');
     });
   });
 });

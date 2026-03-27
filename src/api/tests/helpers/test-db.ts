@@ -1,18 +1,64 @@
 /**
  * Test Database Setup Helper - Cham.ai
  *
- * This file extends the shared test database with Cham.ai-specific schemas.
+ * Self-contained test database using better-sqlite3 with shared + Cham.ai schemas.
  */
 
 import Database from 'better-sqlite3';
-import {
-  createTestDatabase as createSharedDatabase,
-  TestDatabase as SharedTestDatabase,
-  TestSeedData,
-  TENANTS_TABLE_SCHEMA,
-  USERS_TABLE_SCHEMA,
-  AUDIT_LOG_SCHEMA,
-} from '@servezap/shared/testing/test-db';
+
+// ── Shared base schemas (was @servezap/shared/testing/test-db) ────
+
+const TENANTS_TABLE_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS tenants (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    plan TEXT DEFAULT 'starter',
+    api_key TEXT,
+    status TEXT DEFAULT 'active',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+`;
+
+const USERS_TABLE_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT,
+    role TEXT DEFAULT 'user',
+    status TEXT DEFAULT 'active',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+  );
+`;
+
+const AUDIT_LOG_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS audit_log (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    action TEXT NOT NULL,
+    resource_type TEXT,
+    resource_id TEXT,
+    details TEXT DEFAULT '{}',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+  );
+`;
+
+export interface TestSeedData {
+  tenants?: any[];
+  users?: any[];
+  [key: string]: any[] | undefined;
+}
+
+export interface TestDatabase {
+  db: Database.Database;
+  close: () => void;
+  reset: () => void;
+  seed: (data: TestSeedData) => void;
+}
 
 // Cham.ai specific tables
 export const CALLS_TABLE_SCHEMA = `
@@ -146,16 +192,21 @@ export const WEBHOOKS_TABLE_SCHEMA = `
 /**
  * Extended TestDatabase interface with Cham.ai specific methods
  */
-export interface TestDatabase extends SharedTestDatabase {
+export interface ChamAITestDatabase extends TestDatabase {
   getCallCount: () => number;
   getVoiceMailCount: () => number;
 }
 
 /**
- * Creates a test database with common + Cham.ai specific tables
+ * Creates an in-memory test database with shared + Cham.ai specific tables
  */
-export function createTestDatabase(customSchemas?: string[]): TestDatabase {
-  const tableSchemas = [
+export function createTestDatabase(customSchemas?: string[]): ChamAITestDatabase {
+  const db = new Database(':memory:');
+
+  const baseSchemas = [
+    TENANTS_TABLE_SCHEMA,
+    USERS_TABLE_SCHEMA,
+    AUDIT_LOG_SCHEMA,
     CALLS_TABLE_SCHEMA,
     VOICE_MAILS_TABLE_SCHEMA,
     SESSIONS_TABLE_SCHEMA,
@@ -174,16 +225,47 @@ export function createTestDatabase(customSchemas?: string[]): TestDatabase {
   ];
 
   const allSchemas = [
-    ...tableSchemas,
+    ...baseSchemas,
     ...indexSchemas,
     ...(customSchemas || []),
   ];
 
-  const sharedDb = createSharedDatabase(allSchemas);
-  const db = sharedDb.db;
+  for (const schema of allSchemas) {
+    db.exec(schema);
+  }
 
   return {
-    ...sharedDb,
+    db,
+
+    close: () => {
+      db.close();
+    },
+
+    reset: () => {
+      const tables = [
+        'webhooks', 'knowledge_base', 'assistants', 'messages',
+        'sessions', 'voice_mails', 'calls', 'audit_log', 'users', 'tenants',
+      ];
+      for (const table of tables) {
+        db.exec(`DELETE FROM ${table}`);
+      }
+    },
+
+    seed: (data: TestSeedData) => {
+      for (const [table, rows] of Object.entries(data)) {
+        if (!rows || rows.length === 0) continue;
+        for (const row of rows) {
+          const cols = Object.keys(row);
+          const placeholders = cols.map(() => '?').join(', ');
+          const insert = db.prepare(`INSERT INTO ${table} (${cols.join(', ')}) VALUES (${placeholders})`);
+          const values = cols.map((c) => {
+            const val = (row as any)[c];
+            return val !== null && typeof val === 'object' ? JSON.stringify(val) : val;
+          });
+          insert.run(...values);
+        }
+      }
+    },
 
     getCallCount: () => {
       const result = db.prepare('SELECT COUNT(*) as count FROM calls').get() as { count: number };

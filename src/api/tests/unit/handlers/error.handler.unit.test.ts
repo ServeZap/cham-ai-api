@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { errorHandler } from '../../../src/handlers/error.js';
 
 describe('Error Handler', () => {

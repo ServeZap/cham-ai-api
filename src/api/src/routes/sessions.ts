@@ -1,7 +1,7 @@
 /**
  * Sessions Routes
  *
- * Session and context management
+ * Session and context management with real database operations.
  *
  * @route GET    /api/v1/sessions          - List sessions
  * @route POST   /api/v1/sessions          - Create new session
@@ -14,62 +14,102 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 const SessionSchema = z.object({
-  assistant_id: z.string().uuid(),
-  tenant_id: z.string().uuid(),
+  assistant_id: z.string().uuid().optional(),
   metadata: z.record(z.any()).optional(),
+});
+
+const UpdateSessionSchema = z.object({
+  status: z.string().optional(),
+  context: z.record(z.any()).optional(),
+  metadata: z.record(z.any()).optional(),
+});
+
+const ListSessionsSchema = z.object({
+  page: z.coerce.number().min(1).default(1),
+  limit: z.coerce.number().min(1).max(100).default(20),
+  assistant_id: z.string().uuid().optional(),
+  status: z.string().optional(),
 });
 
 export async function sessionsRoutes(fastify: FastifyInstance) {
   // List sessions
   fastify.get('/', async (request, reply) => {
-    const { page = 1, limit = 20, tenant_id, assistant_id } = request.query as any;
+    const query = ListSessionsSchema.parse(request.query);
+    const jwtPayload = (request as any).user || {};
+    const repo = (fastify as any).repositories.sessions;
+
+    const result = await repo.findAll({
+      tenant_id: jwtPayload.app_metadata?.tenant_id || '',
+      assistant_id: query.assistant_id,
+      user_id: jwtPayload.sub,
+      status: query.status,
+      page: query.page,
+      limit: query.limit,
+    });
 
     return {
-      sessions: [],
-      pagination: { page, limit, total: 0, pages: 0 },
+      sessions: result.sessions,
+      pagination: {
+        page: query.page,
+        limit: query.limit,
+        total: result.total,
+        pages: Math.ceil(result.total / query.limit),
+      },
     };
   });
 
   // Create new session
   fastify.post('/', async (request, reply) => {
     const data = SessionSchema.parse(request.body);
+    const jwtPayload = (request as any).user || {};
+    const repo = (fastify as any).repositories.sessions;
 
-    const session = {
-      id: crypto.randomUUID(),
-      ...data,
-      status: 'active',
-      context: {},
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
+    const session = await repo.create({
+      tenant_id: jwtPayload.app_metadata?.tenant_id || '',
+      assistant_id: data.assistant_id || null,
+      user_id: jwtPayload.sub,
+      metadata: data.metadata,
+    });
 
     return reply.status(201).send(session);
   });
 
   // Get session by ID
-  fastify.get('/:id', async (request, reply) => {
-    const { id } = request.params as { id: string };
+  fastify.get<{ Params: { id: string } }>('/:id', async (request, reply) => {
+    const { id } = request.params;
+    const repo = (fastify as any).repositories.sessions;
+    const session = await repo.findById(id);
 
-    return reply.status(404).send({
-      error: 'Session not found',
-      code: 'SESSION_NOT_FOUND',
-    });
+    if (!session) {
+      return reply.status(404).send({ error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+    }
+
+    return session;
   });
 
   // Update session
-  fastify.put('/:id', async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const { context, metadata } = request.body as any;
+  fastify.put<{ Params: { id: string } }>('/:id', async (request, reply) => {
+    const { id } = request.params;
+    const data = UpdateSessionSchema.parse(request.body);
+    const repo = (fastify as any).repositories.sessions;
 
-    return reply.status(404).send({
-      error: 'Session not found',
-      code: 'SESSION_NOT_FOUND',
-    });
+    const session = await repo.update(id, data);
+    if (!session) {
+      return reply.status(404).send({ error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+    }
+
+    return session;
   });
 
   // Delete session
-  fastify.delete('/:id', async (request, reply) => {
-    const { id } = request.params as { id: string };
+  fastify.delete<{ Params: { id: string } }>('/:id', async (request, reply) => {
+    const { id } = request.params;
+    const repo = (fastify as any).repositories.sessions;
+    const deleted = await repo.delete(id);
+
+    if (!deleted) {
+      return reply.status(404).send({ error: 'Session not found', code: 'SESSION_NOT_FOUND' });
+    }
 
     return reply.status(204).send();
   });

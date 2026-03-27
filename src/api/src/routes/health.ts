@@ -23,8 +23,8 @@ export async function healthRoutes(fastify: FastifyInstance) {
   // Readiness probe (checks dependencies)
   fastify.get('/ready', async (request, reply) => {
     const checks = {
-      database: await checkDatabase(),
-      redis: await checkRedis(),
+      database: await checkDatabase(fastify),
+      redis: await checkRedis(fastify),
     };
 
     const isReady = Object.values(checks).every((check) => check.status === 'ok');
@@ -53,20 +53,37 @@ export async function healthRoutes(fastify: FastifyInstance) {
   });
 }
 
-export async function checkDatabase() {
+async function checkDatabase(fastify: FastifyInstance) {
   try {
-    // TODO: Implement actual database check
-    return { status: 'ok', latency_ms: 5 };
+    const pg = (fastify as any).pg;
+    if (!pg) return { status: 'ok', latency_ms: 0, note: 'pg plugin not registered' };
+
+    const start = Date.now();
+    await pg.query('SELECT 1');
+    return { status: 'ok', latency_ms: Date.now() - start };
   } catch (error) {
-    return { status: 'error', message: error instanceof Error ? error.message : 'Unknown error' };
+    return {
+      status: 'error',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    };
   }
 }
 
-export async function checkRedis() {
+async function checkRedis(fastify: FastifyInstance) {
   try {
-    // TODO: Implement actual Redis check
-    return { status: 'ok', latency_ms: 2 };
+    const redis = (fastify as any).redis;
+    if (!redis) return { status: 'ok', latency_ms: 0, note: 'redis plugin not registered' };
+
+    const start = Date.now();
+    await redis.set('cham:health:check', '1', 'EX', 10);
+    await redis.get('cham:health:check');
+    return { status: 'ok', latency_ms: Date.now() - start };
   } catch (error) {
-    return { status: 'error', message: error instanceof Error ? error.message : 'Unknown error' };
+    return {
+      status: 'error',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    };
   }
 }
+
+export { checkDatabase, checkRedis };

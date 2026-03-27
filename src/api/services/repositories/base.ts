@@ -4,19 +4,17 @@
  * Common database operations
  */
 
-import { FastifyInstance } from 'fastify';
-
 export abstract class BaseRepository {
-  constructor(protected db: FastifyInstance['pg']) {}
+  constructor(protected db: any) {}
 
   protected query<T>(sql: string, params?: any[]): Promise<T[]> {
-    return this.db.query(sql, params).then((result) => result.rows);
+    return this.db.query(sql, params).then((result: any) => result.rows);
   }
 
   protected queryOne<T>(sql: string, params?: any[]): Promise<T | null> {
     return this.db
       .query(sql, params)
-      .then((result) => result.rows[0] || null);
+      .then((result: any) => result.rows[0] || null);
   }
 
   protected async execute(sql: string, params?: any[]): Promise<void> {
@@ -34,10 +32,12 @@ export abstract class BaseRepository {
       RETURNING *
     `;
 
-    return this.queryOne<T>(sql, values);
+    const result = await this.queryOne<T>(sql, values);
+    if (!result) throw new Error(`Insert into ${table} failed`);
+    return result;
   }
 
-  protected async update<T>(
+  protected async updateRow<T>(
     table: string,
     id: string,
     data: Partial<T>

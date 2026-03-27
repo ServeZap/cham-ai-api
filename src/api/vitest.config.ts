@@ -31,7 +31,7 @@ export default defineConfig({
       },
     },
     include: ['**/*.test.ts'],
-    exclude: ['node_modules/', 'dist/'],
+    exclude: ['**/node_modules/**', '**/dist/**'],
     testTimeout: 30000,
     hookTimeout: 30000,
   },

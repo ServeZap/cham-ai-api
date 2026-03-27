@@ -17,6 +17,24 @@ describe('Sessions Routes', () => {
       put: vi.fn(),
       patch: vi.fn(),
       delete: vi.fn(),
+      // Add repositories mock
+      repositories: {
+        sessions: {
+          findAll: vi.fn().mockResolvedValue({ sessions: [], total: 0 }),
+          findById: vi.fn().mockResolvedValue(null),
+          create: vi.fn().mockImplementation(async (data: any) => ({
+            id: '123e4567-e89b-12d3-a456-426614174000',
+            ...data,
+            status: 'active',
+            context: {},
+            metadata: data.metadata || {},
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })),
+          update: vi.fn().mockResolvedValue(null),
+          delete: vi.fn().mockResolvedValue(false),
+        },
+      },
     };
 
     mockReply = {
@@ -71,7 +89,7 @@ describe('Sessions Routes', () => {
 
       const listHandler = mockFastify.get.mock.calls.find((call: any[]) => call[0] === '/')[1];
 
-      const result = await listHandler({ query: { assistant_id: 'assistant-456' } }, mockReply);
+      const result = await listHandler({ query: { assistant_id: '550e8400-e29b-41d4-a716-446655440000' } }, mockReply);
 
       expect(result).toBeDefined();
     });
@@ -85,7 +103,6 @@ describe('Sessions Routes', () => {
 
       const sessionData = {
         assistant_id: '550e8400-e29b-41d4-a716-446655440000',
-        tenant_id: '550e8400-e29b-41d4-a716-446655440001',
       };
 
       await createHandler({ body: sessionData }, mockReply);
@@ -94,7 +111,6 @@ describe('Sessions Routes', () => {
       expect(mockReply.send).toHaveBeenCalledWith(
         expect.objectContaining({
           assistant_id: sessionData.assistant_id,
-          tenant_id: sessionData.tenant_id,
           status: 'active',
         })
       );
@@ -107,7 +123,6 @@ describe('Sessions Routes', () => {
 
       const sessionData = {
         assistant_id: '550e8400-e29b-41d4-a716-446655440002',
-        tenant_id: '550e8400-e29b-41d4-a716-446655440003',
       };
 
       await createHandler({ body: sessionData }, mockReply);
@@ -124,7 +139,6 @@ describe('Sessions Routes', () => {
 
       const sessionData = {
         assistant_id: '550e8400-e29b-41d4-a716-446655440004',
-        tenant_id: '550e8400-e29b-41d4-a716-446655440005',
       };
 
       await createHandler({ body: sessionData }, mockReply);
@@ -140,7 +154,6 @@ describe('Sessions Routes', () => {
 
       const sessionData = {
         assistant_id: '550e8400-e29b-41d4-a716-446655440006',
-        tenant_id: '550e8400-e29b-41d4-a716-446655440007',
         metadata: { source: 'web', campaign: 'promo' },
       };
 
@@ -162,41 +175,30 @@ describe('Sessions Routes', () => {
       await expect(createHandler({ body: invalidData }, mockReply)).rejects.toThrow();
     });
 
-    it('should reject invalid tenant_id format', async () => {
+    it('should reject invalid assistant_id format', async () => {
       await sessionsRoutes(mockFastify);
 
       const createHandler = mockFastify.post.mock.calls.find((call: any[]) => call[0] === '/')[1];
 
       const invalidData = {
-        assistant_id: '550e8400-e29b-41d4-a716-446655440000',
-        tenant_id: 'invalid-uuid',
+        assistant_id: 'not-a-uuid',
       };
 
       await expect(createHandler({ body: invalidData }, mockReply)).rejects.toThrow();
     });
 
-    it('should reject missing assistant_id', async () => {
+    it('should accept body with only metadata', async () => {
       await sessionsRoutes(mockFastify);
 
       const createHandler = mockFastify.post.mock.calls.find((call: any[]) => call[0] === '/')[1];
 
-      const invalidData = {
-        tenant_id: '550e8400-e29b-41d4-a716-446655440000',
+      const validData = {
+        metadata: { source: 'api' },
       };
 
-      await expect(createHandler({ body: invalidData }, mockReply)).rejects.toThrow();
-    });
-
-    it('should reject missing tenant_id', async () => {
-      await sessionsRoutes(mockFastify);
-
-      const createHandler = mockFastify.post.mock.calls.find((call: any[]) => call[0] === '/')[1];
-
-      const invalidData = {
-        assistant_id: '550e8400-e29b-41d4-a716-446655440000',
-      };
-
-      await expect(createHandler({ body: invalidData }, mockReply)).rejects.toThrow();
+      // assistant_id is optional, so this should succeed
+      const result = await createHandler({ body: validData }, mockReply);
+      expect(mockReply.status).toHaveBeenCalledWith(201);
     });
   });
 
@@ -262,6 +264,9 @@ describe('Sessions Routes', () => {
       await sessionsRoutes(mockFastify);
 
       const deleteHandler = mockFastify.delete.mock.calls.find((call: any[]) => call[0] === '/:id')[1];
+
+      // Override mock to return true for this test
+      (mockFastify as any).repositories.sessions.delete = vi.fn().mockResolvedValue(true);
 
       await deleteHandler({ params: { id: 'session-id' } }, mockReply);
 

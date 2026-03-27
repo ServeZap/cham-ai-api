@@ -4,7 +4,6 @@
  * Database operations for sessions
  */
 
-import { FastifyInstance } from 'fastify';
 import { BaseRepository } from './base.js';
 
 export interface Session {
@@ -48,7 +47,7 @@ export interface SessionFilter {
 }
 
 export class SessionsRepository extends BaseRepository {
-  constructor(db: FastifyInstance['pg']) {
+  constructor(db: any) {
     super(db);
   }
 
@@ -121,7 +120,20 @@ export class SessionsRepository extends BaseRepository {
   }
 
   async update(id: string, dto: UpdateSessionDTO): Promise<Session | null> {
-    return super.update<Session>('sessions', id, dto);
+    const keys = Object.keys(dto);
+    const values = Object.values(dto);
+    const placeholders = keys
+      .map((key, i) => `${key} = $${i + 1}`)
+      .join(', ');
+
+    const sql = `
+      UPDATE sessions
+      SET ${placeholders}, updated_at = NOW()
+      WHERE id = $${keys.length + 1}
+      RETURNING *
+    `;
+
+    return this.queryOne<Session>(sql, [...values, id]);
   }
 
   async delete(id: string): Promise<boolean> {
