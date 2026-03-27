@@ -39,6 +39,10 @@ describe('ClawdTalk Routes', () => {
       jwt: {
         verify: vi.fn(),
       },
+      // Add eventBus mock
+      eventBus: {
+        publish: vi.fn().mockResolvedValue(undefined),
+      },
     };
   });
 
@@ -205,29 +209,36 @@ describe('ClawdTalk Routes', () => {
   });
 
   describe('Event Types', () => {
+    const validEvents = ['start', 'speech', 'speech_partial', 'end', 'error', 'hangup'];
+
     it('should support start event', () => {
       const event = { event: 'start' };
-      expect(['start', 'speech', 'end', 'error', 'hangup']).toContain(event.event);
+      expect(validEvents).toContain(event.event);
     });
 
     it('should support speech event', () => {
       const event = { event: 'speech' };
-      expect(['start', 'speech', 'end', 'error', 'hangup']).toContain(event.event);
+      expect(validEvents).toContain(event.event);
+    });
+
+    it('should support speech_partial event', () => {
+      const event = { event: 'speech_partial' };
+      expect(validEvents).toContain(event.event);
     });
 
     it('should support end event', () => {
       const event = { event: 'end' };
-      expect(['start', 'speech', 'end', 'error', 'hangup']).toContain(event.event);
+      expect(validEvents).toContain(event.event);
     });
 
     it('should support error event', () => {
       const event = { event: 'error' };
-      expect(['start', 'speech', 'end', 'error', 'hangup']).toContain(event.event);
+      expect(validEvents).toContain(event.event);
     });
 
     it('should support hangup event', () => {
       const event = { event: 'hangup' };
-      expect(['start', 'speech', 'end', 'error', 'hangup']).toContain(event.event);
+      expect(validEvents).toContain(event.event);
     });
   });
 });

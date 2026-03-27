@@ -17,7 +17,7 @@ const ClawdTalkEventSchema = z.object({
   text: z.string().optional(),
   timestamp: z.string(),
   sequence: z.number(),
-  event: z.enum(['start', 'speech', 'end', 'error', 'hangup']),
+  event: z.enum(['start', 'speech', 'speech_partial', 'end', 'error', 'hangup']),
   pin_verified: z.boolean().optional(),
   token: z.string().optional(), // Auth token (first message)
 });
@@ -132,14 +132,67 @@ export async function clawdTalkRoutes(fastify: FastifyInstance) {
               break;
             }
 
+            case 'speech_partial': {
+              // Incremental transcription segment — forward to subscribers
+              if (!event.text) break;
+
+              // Update Redis with partial transcript
+              const redis = (fastify as any).redis;
+              if (redis) {
+                try {
+                  const callData = await redis.get(`clawdtalk:call:${event.call_id}`);
+                  if (callData) {
+                    const parsed = JSON.parse(callData);
+                    parsed.partialTranscript = event.text;
+                    parsed.lastActivity = new Date().toISOString();
+                    await redis.set(
+                      `clawdtalk:call:${event.call_id}`,
+                      JSON.stringify(parsed),
+                      'EX',
+                      3600
+                    );
+                  }
+                } catch {
+                  // Redis update failed
+                }
+              }
+
+              // Publish partial transcription event
+              const eventBus: any = (fastify as any).eventBus;
+              if (eventBus) {
+                const tenantId = (event as any).tenant_id || 'system';
+                await eventBus.publish({
+                  type: 'transcription.partial',
+                  tenantId,
+                  callId: event.call_id,
+                  payload: { text: event.text, isFinal: false },
+                  timestamp: new Date().toISOString(),
+                });
+              }
+              break;
+            }
+
             case 'speech': {
               if (!event.text) {
                 fastify.log.warn(`[ClawdTalk] Speech event without text: ${event.call_id}`);
                 break;
               }
 
+              // Publish final transcription event
+              const eventBus: any = (fastify as any).eventBus;
+              if (eventBus) {
+                const tenantId = (event as any).tenant_id || 'system';
+                await eventBus.publish({
+                  type: 'transcription.final',
+                  tenantId,
+                  callId: event.call_id,
+                  payload: { text: event.text, isFinal: true },
+                  timestamp: new Date().toISOString(),
+                });
+              }
+
               // Process with AI (real OpenAI)
-              const aiResponse = await processAIResponse(fastify, event.call_id, event.text);
+              const aiResponse = processAIResponse(fastify, event.call_id, event.text);
 
               // Update Redis
               const redis = (fastify as any).redis;

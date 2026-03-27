@@ -13,7 +13,8 @@
  */
 
 export interface CallEvent {
-  type: 'call.created' | 'call.updated' | 'call.status_changed' | 'call.ended';
+  type: 'call.created' | 'call.updated' | 'call.status_changed' | 'call.ended'
+    | 'transcription.partial' | 'transcription.final';
   tenantId: string;
   callId: string;
   payload: Record<string, unknown>;
