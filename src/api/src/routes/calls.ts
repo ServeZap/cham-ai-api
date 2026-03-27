@@ -199,4 +199,73 @@ export async function callsRoutes(fastify: FastifyInstance) {
     const row = result.rows[0];
     return reply.status(201).send(row);
   });
+
+  // Get transcript for a call
+  fastify.get('/transcripts/:callId', async (request, reply) => {
+    const { callId } = request.params as { callId: string };
+    const db = (fastify as any).pg;
+
+    const result = await db.query(
+      `SELECT transcript_text, language, segments, created_at, confidence
+       FROM transcripts
+       WHERE call_id = $1
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [callId]
+    );
+
+    const row = result.rows[0] || null;
+    return { data: row };
+  });
+
+  // Get transcribe job audio_ref for a call
+  fastify.get('/transcribe-jobs/:callId/audio', async (request, reply) => {
+    const { callId } = request.params as { callId: string };
+    const db = (fastify as any).pg;
+
+    const result = await db.query(
+      `SELECT audio_ref
+       FROM transcribe_jobs
+       WHERE call_id = $1 AND audio_ref IS NOT NULL
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [callId]
+    );
+
+    const row = result.rows[0] || null;
+    return { data: row };
+  });
+
+  // CDR records for billing (telecom_usage with joined call data)
+  fastify.get('/cdrs', async (request) => {
+    const query = z.object({
+      dateFrom: z.string().optional(),
+      dateTo: z.string().optional(),
+      offset: z.coerce.number().min(0).default(0),
+      limit: z.coerce.number().min(1).max(1000).default(1000),
+    }).parse(request.query);
+    const db = (fastify as any).pg;
+
+    let sql = `SELECT tu.*, c.caller_number, c.duration_seconds, c.status, c.outcome
+               FROM telecom_usage tu
+               LEFT JOIN calls c ON c.id::text = tu.call_id::text
+               ORDER BY tu.timestamp DESC`;
+    const params: any[] = [];
+    let paramIdx = 1;
+
+    if (query.dateFrom) {
+      sql += ` WHERE tu.timestamp >= $${paramIdx++}`;
+      params.push(query.dateFrom);
+    }
+    if (query.dateTo) {
+      sql += params.length > 0 ? ` AND tu.timestamp <= $${paramIdx++}` : ` WHERE tu.timestamp <= $${paramIdx++}`;
+      params.push(query.dateTo);
+    }
+
+    sql += ` LIMIT $${paramIdx++} OFFSET $${paramIdx++}`;
+    params.push(query.limit, query.offset);
+
+    const result = await db.query(sql, params);
+    return { data: result.rows };
+  });
 }

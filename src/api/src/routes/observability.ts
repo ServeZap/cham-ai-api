@@ -166,6 +166,80 @@ export async function observabilityRoutes(fastify: FastifyInstance) {
     const alerts = await repo.findAlerts();
     return { alerts };
   });
+
+  // Alert history (all alerts, not just active)
+  fastify.get('/alert-history', async (request) => {
+    const query = z.object({
+      limit: z.coerce.number().min(1).max(500).default(200),
+    }).parse(request.query);
+    const db = (fastify as any).pg;
+
+    const result = await db.query(
+      `SELECT * FROM provider_alerts ORDER BY created_at DESC LIMIT $1`,
+      [query.limit]
+    );
+    return { data: result.rows };
+  });
+
+  // Provider jobs (paginated)
+  fastify.get('/provider-jobs', async (request) => {
+    const query = z.object({
+      page: z.coerce.number().min(0).default(0),
+      pageSize: z.coerce.number().min(1).max(100).default(25),
+      provider_type: z.string().optional(),
+      status: z.string().optional(),
+    }).parse(request.query);
+    const db = (fastify as any).pg;
+
+    let sql = `SELECT * FROM provider_jobs`;
+    const params: any[] = [];
+    let paramIdx = 1;
+
+    const conditions: string[] = [];
+    if (query.provider_type && query.provider_type !== 'all') {
+      conditions.push(`provider_type = $${paramIdx++}`);
+      params.push(query.provider_type);
+    }
+    if (query.status && query.status !== 'all') {
+      conditions.push(`status = $${paramIdx++}`);
+      params.push(query.status);
+    }
+    if (conditions.length > 0) sql += ` WHERE ${conditions.join(' AND ')}`;
+
+    sql += ` ORDER BY created_at DESC LIMIT $${paramIdx++} OFFSET $${paramIdx++}`;
+    params.push(query.pageSize, query.page * query.pageSize);
+
+    const result = await db.query(sql, params);
+    return { data: result.rows };
+  });
+
+  // Health checks raw (for GPU status / detailed views)
+  fastify.get('/health-checks', async (request) => {
+    const query = z.object({
+      limit: z.coerce.number().min(1).max(2000).default(500),
+    }).parse(request.query);
+    const db = (fastify as any).pg;
+
+    const result = await db.query(
+      `SELECT * FROM historico_health_checks ORDER BY check_timestamp DESC LIMIT $1`,
+      [query.limit]
+    );
+    return { data: result.rows };
+  });
+
+  // Failover logs raw (for GPU status / detailed views)
+  fastify.get('/failover-logs', async (request) => {
+    const query = z.object({
+      limit: z.coerce.number().min(1).max(500).default(200),
+    }).parse(request.query);
+    const db = (fastify as any).pg;
+
+    const result = await db.query(
+      `SELECT * FROM failover_notification_log ORDER BY triggered_at DESC LIMIT $1`,
+      [query.limit]
+    );
+    return { data: result.rows };
+  });
 }
 
 function getPeriodStart(period: string): Date {
