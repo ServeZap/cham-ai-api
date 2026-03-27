@@ -109,6 +109,19 @@ export async function clawdTalkRoutes(fastify: FastifyInstance) {
                 );
               }
 
+              // Publish call event
+              const eventBus: any = (fastify as any).eventBus;
+              if (eventBus) {
+                const tenantId = (event as any).tenant_id || (fastify as any).tenantId || 'system';
+                await eventBus.publish({
+                  type: 'call.status_changed',
+                  tenantId,
+                  callId: event.call_id,
+                  payload: { status: 'in_progress', event: 'start' },
+                  timestamp: new Date().toISOString(),
+                });
+              }
+
               const response: ClawdTalkResponse = {
                 type: 'response',
                 call_id: event.call_id,
@@ -170,6 +183,19 @@ export async function clawdTalkRoutes(fastify: FastifyInstance) {
               const redis = (fastify as any).redis;
               if (redis) {
                 await redis.del(`clawdtalk:call:${event.call_id}`);
+              }
+
+              // Publish call ended event
+              const eventBus: any = (fastify as any).eventBus;
+              if (eventBus) {
+                const tenantId = (event as any).tenant_id || 'system';
+                await eventBus.publish({
+                  type: 'call.ended',
+                  tenantId,
+                  callId: event.call_id,
+                  payload: { status: 'ended', event: event.event },
+                  timestamp: new Date().toISOString(),
+                });
               }
               break;
             }

@@ -52,10 +52,22 @@ export async function callsRoutes(fastify: FastifyInstance) {
       start_time: new Date().toISOString(),
     });
 
+    // Publish event
+    const eventBus: any = (fastify as any).eventBus;
+    if (eventBus && call.tenant_id) {
+      await eventBus.publish({
+        type: 'call.created',
+        tenantId: call.tenant_id,
+        callId: call.id,
+        payload: { status: call.status, caller_number: call.caller_number, receiver_id: call.receiver_id },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     // Create session for this call
     const sessionsRepo = (fastify as any).repositories.sessions;
     const session = await sessionsRepo.create({
-      tenant_id: 'system', // Inbound calls may not have tenant context yet
+      tenant_id: call.tenant_id || 'system',
       assistant_id: null,
     });
 
@@ -80,6 +92,18 @@ export async function callsRoutes(fastify: FastifyInstance) {
       status: 'initiated',
       start_time: new Date().toISOString(),
     });
+
+    // Publish event
+    const eventBus: any = (fastify as any).eventBus;
+    if (eventBus && call.tenant_id) {
+      await eventBus.publish({
+        type: 'call.created',
+        tenantId: call.tenant_id,
+        callId: call.id,
+        payload: { status: call.status, receiver_id: call.receiver_id },
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     // TODO: Dispatch to telephony provider (ClawdTalk/Twilio)
     // For now, mark as initiated

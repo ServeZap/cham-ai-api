@@ -31,6 +31,8 @@ import { storageRoutes } from './routes/storage.js';
 import { errorHandler } from './handlers/error.js';
 import { authHook } from './hooks/auth.js';
 import { repositoriesPlugin } from './plugins/repositories.js';
+import { EventBus } from './services/event-bus.js';
+import { eventsRoutes } from './routes/events.js';
 
 export async function createServer() {
   const server = Fastify({
@@ -109,6 +111,11 @@ export async function createServer() {
   // Register repository plugin (provides fastify.repositories.*)
   await server.register(repositoriesPlugin);
 
+  // Register event bus (provides fastify.eventBus for pub/sub)
+  const redis = (server as any).redis || null;
+  const eventBus = new EventBus(redis);
+  server.decorate('eventBus', eventBus);
+
   // Register hooks
   server.addHook('onRequest', authHook);
 
@@ -124,6 +131,7 @@ export async function createServer() {
   await server.register(missionsRoutes, { prefix: '/api/v1/missions' });
   await server.register(adminRoutes, { prefix: '/api/v1/admin' });
   await server.register(storageRoutes, { prefix: '/api/v1/storage' });
+  await server.register(eventsRoutes, { prefix: '/api/v1/events' });
 
   // Error handler
   server.setErrorHandler(errorHandler);
