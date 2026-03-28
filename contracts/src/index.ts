@@ -78,12 +78,12 @@ export {
   AlertHistoryQuerySchema,
   ProviderJobsQuerySchema,
   HealthChecksQuerySchema,
-  FailoverLogsQuerySchema,
 } from './schemas/observability.schema.js';
 
 export {
   CreateConfigSchema,
   ToggleConfigSchema,
+  FailoverLogsQuerySchema,
 } from './schemas/failover.schema.js';
 
 export { DemoRequestSchema } from './schemas/demo.schema.js';

@@ -18,7 +18,3 @@ export const ProviderJobsQuerySchema = z.object({
 export const HealthChecksQuerySchema = z.object({
   limit: z.coerce.number().min(1).max(2000).default(500),
 });
-
-export const FailoverLogsQuerySchema = z.object({
-  limit: z.coerce.number().min(1).max(500).default(200),
-});

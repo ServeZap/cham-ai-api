@@ -9,28 +9,10 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { z } from 'zod';
-
-// Incoming event from ClawdTalk
-const ClawdTalkEventSchema = z.object({
-  call_id: z.string(),
-  text: z.string().optional(),
-  timestamp: z.string(),
-  sequence: z.number(),
-  event: z.enum(['start', 'speech', 'speech_partial', 'end', 'error', 'hangup']),
-  pin_verified: z.boolean().optional(),
-  token: z.string().optional(), // Auth token (first message)
-});
-
-// Response to ClawdTalk
-interface ClawdTalkResponse {
-  type: 'response' | 'error' | 'hangup' | 'connected';
-  call_id: string;
-  text?: string;
-  sequence?: number;
-  error?: string;
-  timestamp?: string;
-}
+import {
+  ClawdTalkEventSchema,
+  type ClawdTalkResponse,
+} from '../../../../contracts/src/index.js';
 
 export async function clawdTalkRoutes(fastify: FastifyInstance) {
   // Health check endpoint

@@ -11,18 +11,12 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { z } from 'zod';
 import { isGodAdminEmail } from '../../services/repositories/admin.repository.js';
-
-const CreateConfigSchema = z.object({
-  channel: z.enum(['webhook', 'email']),
-  target: z.string().min(1),
-  enabled: z.boolean().default(true),
-});
-
-const ToggleConfigSchema = z.object({
-  enabled: z.boolean(),
-});
+import {
+  CreateConfigSchema,
+  ToggleConfigSchema,
+  FailoverLogsQuerySchema,
+} from '../../../../contracts/src/index.js';
 
 export async function failoverRoutes(fastify: FastifyInstance) {
   const getRepo = () => (fastify as any).repositories.failover;
@@ -96,9 +90,7 @@ export async function failoverRoutes(fastify: FastifyInstance) {
 
   // List failover logs
   fastify.get('/logs', async (request) => {
-    const query = z.object({
-      limit: z.coerce.number().min(1).max(200).default(50),
-    }).parse(request.query);
+    const query = FailoverLogsQuerySchema.parse(request.query);
     const repo = getRepo();
 
     const logs = await repo.findLogs(query.limit);

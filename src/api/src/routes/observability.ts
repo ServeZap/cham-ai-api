@@ -9,11 +9,13 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { z } from 'zod';
-
-const MetricsQuerySchema = z.object({
-  period: z.enum(['daily', 'weekly', 'monthly']).default('daily'),
-});
+import {
+  MetricsQuerySchema,
+  AlertHistoryQuerySchema,
+  ProviderJobsQuerySchema,
+  HealthChecksQuerySchema,
+  FailoverLogsQuerySchema,
+} from '../../../../contracts/src/index.js';
 
 export async function observabilityRoutes(fastify: FastifyInstance) {
   // Provider metrics
@@ -169,9 +171,7 @@ export async function observabilityRoutes(fastify: FastifyInstance) {
 
   // Alert history (all alerts, not just active)
   fastify.get('/alert-history', async (request) => {
-    const query = z.object({
-      limit: z.coerce.number().min(1).max(500).default(200),
-    }).parse(request.query);
+    const query = AlertHistoryQuerySchema.parse(request.query);
     const repo = (fastify as any).repositories.healthChecks;
 
     const rows = await repo.findAlertHistory(query.limit);
@@ -180,12 +180,7 @@ export async function observabilityRoutes(fastify: FastifyInstance) {
 
   // Provider jobs (paginated)
   fastify.get('/provider-jobs', async (request) => {
-    const query = z.object({
-      page: z.coerce.number().min(0).default(0),
-      pageSize: z.coerce.number().min(1).max(100).default(25),
-      provider_type: z.string().optional(),
-      status: z.string().optional(),
-    }).parse(request.query);
+    const query = ProviderJobsQuerySchema.parse(request.query);
     const repo = (fastify as any).repositories.healthChecks;
 
     const rows = await repo.findProviderJobs(query);
@@ -194,9 +189,7 @@ export async function observabilityRoutes(fastify: FastifyInstance) {
 
   // Health checks raw (for GPU status / detailed views)
   fastify.get('/health-checks', async (request) => {
-    const query = z.object({
-      limit: z.coerce.number().min(1).max(2000).default(500),
-    }).parse(request.query);
+    const query = HealthChecksQuerySchema.parse(request.query);
     const repo = (fastify as any).repositories.healthChecks;
 
     const rows = await repo.findHealthChecksRaw(query.limit);
@@ -205,9 +198,7 @@ export async function observabilityRoutes(fastify: FastifyInstance) {
 
   // Failover logs raw (for GPU status / detailed views)
   fastify.get('/failover-logs', async (request) => {
-    const query = z.object({
-      limit: z.coerce.number().min(1).max(500).default(200),
-    }).parse(request.query);
+    const query = FailoverLogsQuerySchema.parse(request.query);
     const repo = (fastify as any).repositories.failover;
 
     const rows = await repo.findLogs(query.limit);

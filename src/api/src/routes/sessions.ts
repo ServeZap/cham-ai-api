@@ -11,25 +11,11 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { z } from 'zod';
-
-const SessionSchema = z.object({
-  assistant_id: z.string().uuid().optional(),
-  metadata: z.record(z.any()).optional(),
-});
-
-const UpdateSessionSchema = z.object({
-  status: z.string().optional(),
-  context: z.record(z.any()).optional(),
-  metadata: z.record(z.any()).optional(),
-});
-
-const ListSessionsSchema = z.object({
-  page: z.coerce.number().min(1).default(1),
-  limit: z.coerce.number().min(1).max(100).default(20),
-  assistant_id: z.string().uuid().optional(),
-  status: z.string().optional(),
-});
+import {
+  CreateSessionSchema,
+  UpdateSessionSchema,
+  ListSessionsSchema,
+} from '../../../../contracts/src/index.js';
 
 export async function sessionsRoutes(fastify: FastifyInstance) {
   // List sessions
@@ -60,7 +46,7 @@ export async function sessionsRoutes(fastify: FastifyInstance) {
 
   // Create new session
   fastify.post('/', async (request, reply) => {
-    const data = SessionSchema.parse(request.body);
+    const data = CreateSessionSchema.parse(request.body);
     const jwtPayload = (request as any).user || {};
     const repo = (fastify as any).repositories.sessions;
 
