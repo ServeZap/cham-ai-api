@@ -19,18 +19,14 @@ export async function usersRoutes(fastify: FastifyInstance) {
       return reply.status(401).send({ error: 'Not authenticated', code: 'UNAUTHORIZED' });
     }
 
-    const db = (fastify as any).pg;
-    const result = await db.query(
-      `SELECT tenant_id FROM profiles WHERE user_id = $1`,
-      [userId]
-    );
+    const repo = (fastify as any).repositories.users;
+    const tenantId = await repo.getTenantId(userId);
 
-    const row = result.rows[0];
-    if (!row) {
+    if (!tenantId) {
       return reply.status(404).send({ error: 'Profile not found', code: 'PROFILE_NOT_FOUND' });
     }
 
-    return { tenant_id: row.tenant_id };
+    return { tenant_id: tenantId };
   });
 
   // Delete own profile
@@ -42,11 +38,8 @@ export async function usersRoutes(fastify: FastifyInstance) {
       return reply.status(401).send({ error: 'Not authenticated', code: 'UNAUTHORIZED' });
     }
 
-    const db = (fastify as any).pg;
-    await db.query(
-      `DELETE FROM profiles WHERE user_id = $1`,
-      [userId]
-    );
+    const repo = (fastify as any).repositories.users;
+    await repo.deleteProfile(userId);
 
     return { deleted: true };
   });

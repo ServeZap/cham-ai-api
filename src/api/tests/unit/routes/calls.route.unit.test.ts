@@ -45,6 +45,10 @@ describe('Calls Routes', () => {
             start_time: new Date().toISOString(),
           }),
           update: vi.fn().mockResolvedValue(null),
+          insertTranscript: vi.fn().mockResolvedValue({ id: '1', call_id: 'call-1', created_at: new Date().toISOString() }),
+          findTranscript: vi.fn().mockResolvedValue(null),
+          findTranscribeJobAudio: vi.fn().mockResolvedValue(null),
+          findCdrs: vi.fn().mockResolvedValue([]),
         },
         sessions: {
           create: vi.fn().mockResolvedValue({
@@ -55,9 +59,6 @@ describe('Calls Routes', () => {
             context: {},
           }),
         },
-      },
-      pg: {
-        query: vi.fn().mockResolvedValue({ rows: [{ id: '1', call_id: 'call-1', created_at: new Date().toISOString() }] }),
       },
     };
 
@@ -347,10 +348,9 @@ describe('Calls Routes', () => {
         mockReply
       );
 
-      expect(result).toEqual({ data: [{ id: '1', call_id: 'call-1', created_at: expect.any(String) }] });
-      expect(mockFastify.pg.query).toHaveBeenCalledWith(
-        expect.stringContaining('WHERE tu.tenant_id = $1'),
-        expect.arrayContaining(['tenant-1'])
+      expect(result).toEqual({ data: [] });
+      expect(mockFastify.repositories.calls.findCdrs).toHaveBeenCalledWith(
+        expect.objectContaining({ tenant_id: 'tenant-1' })
       );
     });
 
@@ -381,11 +381,9 @@ describe('Calls Routes', () => {
         mockReply
       );
 
-      expect(result).toEqual({ data: [{ id: '1', call_id: 'call-1', created_at: expect.any(String) }] });
-      // God admin query should NOT have a WHERE tenant_id clause
-      expect(mockFastify.pg.query).toHaveBeenCalledWith(
-        expect.not.stringContaining('WHERE tu.tenant_id'),
-        expect.any(Array)
+      expect(result).toEqual({ data: [] });
+      expect(mockFastify.repositories.calls.findCdrs).toHaveBeenCalledWith(
+        expect.objectContaining({ tenant_id: null })
       );
     });
   });
