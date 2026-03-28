@@ -14,6 +14,8 @@ import { AdminRepository } from '../../services/repositories/admin.repository.js
 import { TelecomUsageRepository } from '../../services/repositories/telecom-usage.repository.js';
 import { SessionsRepository } from '../../services/repositories/sessions.repository.js';
 import { FailoverRepository } from '../../services/repositories/failover.repository.js';
+import { UsersRepository } from '../../services/repositories/users.repository.js';
+import { DemoRepository } from '../../services/repositories/demo.repository.js';
 
 export interface Repositories {
   calls: CallsRepository;
@@ -24,6 +26,8 @@ export interface Repositories {
   telecomUsage: TelecomUsageRepository;
   sessions: SessionsRepository;
   failover: FailoverRepository;
+  users: UsersRepository;
+  demo: DemoRepository;
 }
 
 export async function repositoriesPlugin(fastify: FastifyInstance) {
@@ -38,6 +42,8 @@ export async function repositoriesPlugin(fastify: FastifyInstance) {
     telecomUsage: new TelecomUsageRepository(db),
     sessions: new SessionsRepository(db),
     failover: new FailoverRepository(db),
+    users: new UsersRepository(db),
+    demo: new DemoRepository(db),
   };
 
   fastify.decorate('repositories', repositories);

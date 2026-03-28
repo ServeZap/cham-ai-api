@@ -71,7 +71,7 @@ describe('Failover Routes', () => {
   describe('POST /configs', () => {
     it('creates a new notification config', async () => {
       const handler = postHandlers.find((h) => h.path === '/configs')?.handler;
-      const mockReply = { status: vi.fn().mockReturnThis(), send: vi.fn() };
+      const mockReply = { status: vi.fn().mockReturnThis(), send: vi.fn().mockReturnThis() };
 
       // Mock admin repo to allow this user
       mockFastify.repositories.admin.isAdmin.mockResolvedValue(true);
@@ -100,7 +100,7 @@ describe('Failover Routes', () => {
 
     it('returns 403 for non-admin users', async () => {
       const handler = postHandlers.find((h) => h.path === '/configs')?.handler;
-      const mockReply = { status: vi.fn().mockReturnThis(), send: vi.fn() };
+      const mockReply = { status: vi.fn().mockReturnThis(), send: vi.fn().mockReturnThis() };
 
       mockFastify.repositories.admin.isAdmin.mockResolvedValue(false);
 
@@ -116,7 +116,7 @@ describe('Failover Routes', () => {
 
     it('allows god admins to bypass admin check', async () => {
       const handler = postHandlers.find((h) => h.path === '/configs')?.handler;
-      const mockReply = { status: vi.fn().mockReturnThis(), send: vi.fn() };
+      const mockReply = { status: vi.fn().mockReturnThis(), send: vi.fn().mockReturnThis() };
 
       mockFastify.repositories.admin.isAdmin.mockResolvedValue(false);
 
@@ -127,6 +127,8 @@ describe('Failover Routes', () => {
 
       expect(mockReply.status).toHaveBeenCalledWith(201);
       expect(mockFastify.repositories.failover.insertConfig).toHaveBeenCalled();
+      // isAdmin should NOT be called for god admins (they bypass DB check)
+      expect(mockFastify.repositories.admin.isAdmin).not.toHaveBeenCalled();
     });
   });
 
@@ -147,7 +149,7 @@ describe('Failover Routes', () => {
 
     it('returns 403 for non-admin users', async () => {
       const handler = patchHandlers.find((h) => h.path === '/configs/:id')?.handler;
-      const mockReply = { status: vi.fn().mockReturnThis(), send: vi.fn() };
+      const mockReply = { status: vi.fn().mockReturnThis(), send: vi.fn().mockReturnThis() };
 
       mockFastify.repositories.admin.isAdmin.mockResolvedValue(false);
 
@@ -193,7 +195,7 @@ describe('Failover Routes', () => {
 
     it('returns 403 for non-admin users', async () => {
       const handler = deleteHandlers.find((h) => h.path === '/configs/:id')?.handler;
-      const mockReply = { status: vi.fn().mockReturnThis(), send: vi.fn() };
+      const mockReply = { status: vi.fn().mockReturnThis(), send: vi.fn().mockReturnThis() };
 
       mockFastify.repositories.admin.isAdmin.mockResolvedValue(false);
 

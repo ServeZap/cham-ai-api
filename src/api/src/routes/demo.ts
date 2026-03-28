@@ -20,13 +20,15 @@ const DemoRequestSchema = z.object({
 export async function demoRoutes(fastify: FastifyInstance) {
   fastify.post('/requests', async (request, reply) => {
     const data = DemoRequestSchema.parse(request.body);
-    const db = (fastify as any).pg;
+    const repo = (fastify as any).repositories.demo;
 
-    await db.query(
-      `INSERT INTO demo_requests (name, email, phone, company, message)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [data.name, data.email, data.phone || null, data.company || null, data.message || null]
-    );
+    await repo.insertRequest({
+      name: data.name,
+      email: data.email,
+      phone: data.phone || null,
+      company: data.company || null,
+      message: data.message || null,
+    });
 
     return reply.status(201).send({ success: true });
   });

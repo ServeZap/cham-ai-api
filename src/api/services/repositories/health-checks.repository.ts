@@ -107,6 +107,44 @@ export class HealthChecksRepository extends BaseRepository {
     return null;
   }
 
+  async findAlertHistory(limit = 200): Promise<any[]> {
+    return this.query(
+      `SELECT id, provider_type, severity, message, resolved_at, created_at
+       FROM provider_alerts ORDER BY created_at DESC LIMIT $1`,
+      [limit]
+    );
+  }
+
+  async findProviderJobs(params: { page: number; pageSize: number; provider_type?: string; status?: string }): Promise<any[]> {
+    const conditions: string[] = [];
+    const sqlParams: any[] = [];
+    let paramIdx = 1;
+
+    if (params.provider_type && params.provider_type !== 'all') {
+      conditions.push(`provider_type = $${paramIdx++}`);
+      sqlParams.push(params.provider_type);
+    }
+    if (params.status && params.status !== 'all') {
+      conditions.push(`status = $${paramIdx++}`);
+      sqlParams.push(params.status);
+    }
+
+    let sql = `SELECT id, provider_type, status, started_at, completed_at, error, created_at FROM provider_jobs`;
+    if (conditions.length > 0) sql += ` WHERE ${conditions.join(' AND ')}`;
+    sql += ` ORDER BY created_at DESC LIMIT $${paramIdx++} OFFSET $${paramIdx++}`;
+    sqlParams.push(params.pageSize, params.page * params.pageSize);
+
+    return this.query(sql, sqlParams);
+  }
+
+  async findHealthChecksRaw(limit = 500): Promise<any[]> {
+    return this.query(
+      `SELECT id, provider_name, provider_label, status, latency_ms, error, check_timestamp
+       FROM historico_health_checks ORDER BY check_timestamp DESC LIMIT $1`,
+      [limit]
+    );
+  }
+
   async resolveAlert(providerName: string): Promise<void> {
     await this.execute(
       `UPDATE provider_alerts SET resolved_at = NOW(), updated_at = NOW()

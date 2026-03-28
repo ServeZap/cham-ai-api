@@ -191,52 +191,27 @@ export async function callsRoutes(fastify: FastifyInstance) {
     const data = TranscriptSchema.parse(request.body);
     const jwtPayload = (request as any).user || {};
     const tenantId = getTenantId(jwtPayload);
-    const db = (fastify as any).pg;
+    const repo = (fastify as any).repositories.calls;
 
-    const result = await db.query(
-      `INSERT INTO transcripts (call_id, transcript_text, language, segments, confidence, tenant_id)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, call_id, created_at`,
-      [data.call_id, data.transcript_text, data.language || null, data.segments ? JSON.stringify(data.segments) : null, data.confidence ?? null, tenantId]
-    );
-
-    const row = result.rows[0];
+    const row = await repo.insertTranscript({ ...data, tenant_id: tenantId });
     return reply.status(201).send(row);
   });
 
   // Get transcript for a call
   fastify.get('/transcripts/:callId', async (request, reply) => {
     const { callId } = request.params as { callId: string };
-    const db = (fastify as any).pg;
+    const repo = (fastify as any).repositories.calls;
 
-    const result = await db.query(
-      `SELECT transcript_text, language, segments, created_at, confidence
-       FROM transcripts
-       WHERE call_id = $1
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [callId]
-    );
-
-    const row = result.rows[0] || null;
+    const row = await repo.findTranscript(callId);
     return { data: row };
   });
 
   // Get transcribe job audio_ref for a call
   fastify.get('/transcribe-jobs/:callId/audio', async (request, reply) => {
     const { callId } = request.params as { callId: string };
-    const db = (fastify as any).pg;
+    const repo = (fastify as any).repositories.calls;
 
-    const result = await db.query(
-      `SELECT audio_ref
-       FROM transcribe_jobs
-       WHERE call_id = $1 AND audio_ref IS NOT NULL
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [callId]
-    );
-
-    const row = result.rows[0] || null;
+    const row = await repo.findTranscribeJobAudio(callId);
     return { data: row };
   });
 
@@ -250,41 +225,20 @@ export async function callsRoutes(fastify: FastifyInstance) {
     }).parse(request.query);
     const jwtPayload = (request as any).user || {};
     const tenantId = getTenantId(jwtPayload);
-    const db = (fastify as any).pg;
 
     // Enforce tenant isolation — god admins can see all tenants
     if (!tenantId && !isGodAdminEmail(jwtPayload.email)) {
       return reply.status(403).send({ error: 'Tenant ID not found in token', code: 'TENANT_NOT_FOUND' });
     }
 
-    let sql = `SELECT tu.*, c.caller_number, c.duration_seconds, c.status, c.outcome
-               FROM telecom_usage tu
-               LEFT JOIN calls c ON c.id = tu.call_id`;
-    const params: any[] = [];
-    let paramIdx = 1;
-    let hasWhere = false;
-
-    // Tenant isolation filter (god admins see all)
-    if (tenantId) {
-      sql += ` WHERE tu.tenant_id = $${paramIdx++}`;
-      params.push(tenantId);
-      hasWhere = true;
-    }
-
-    if (query.dateFrom) {
-      sql += hasWhere ? ` AND tu.timestamp >= $${paramIdx++}` : ` WHERE tu.timestamp >= $${paramIdx++}`;
-      params.push(query.dateFrom);
-      hasWhere = true;
-    }
-    if (query.dateTo) {
-      sql += hasWhere ? ` AND tu.timestamp <= $${paramIdx++}` : ` WHERE tu.timestamp <= $${paramIdx++}`;
-      params.push(query.dateTo);
-    }
-
-    sql += ` ORDER BY tu.timestamp DESC LIMIT $${paramIdx++} OFFSET $${paramIdx++}`;
-    params.push(query.limit, query.offset);
-
-    const result = await db.query(sql, params);
-    return { data: result.rows };
+    const repo = (fastify as any).repositories.calls;
+    const rows = await repo.findCdrs({
+      dateFrom: query.dateFrom,
+      dateTo: query.dateTo,
+      offset: query.offset,
+      limit: query.limit,
+      tenant_id: tenantId,
+    });
+    return { data: rows };
   });
 }

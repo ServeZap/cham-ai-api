@@ -136,6 +136,59 @@ export class CallsRepository extends BaseRepository {
     return this.queryOne<CallRow>(sql, [...values, id]);
   }
 
+  async findTranscript(callId: string): Promise<any> {
+    return this.queryOne(
+      `SELECT transcript_text, language, segments, created_at, confidence
+       FROM transcripts WHERE call_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [callId]
+    );
+  }
+
+  async findTranscribeJobAudio(callId: string): Promise<{ audio_ref: string } | null> {
+    return this.queryOne<{ audio_ref: string }>(
+      `SELECT audio_ref FROM transcribe_jobs
+       WHERE call_id = $1 AND audio_ref IS NOT NULL
+       ORDER BY created_at DESC LIMIT 1`,
+      [callId]
+    );
+  }
+
+  async insertTranscript(data: { call_id: string; transcript_text: string; language?: string; segments?: any; confidence?: number | null; tenant_id?: string }): Promise<any> {
+    return this.queryOne(
+      `INSERT INTO transcripts (call_id, transcript_text, language, segments, confidence, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, call_id, created_at`,
+      [data.call_id, data.transcript_text, data.language || null, data.segments ? JSON.stringify(data.segments) : null, data.confidence ?? null, data.tenant_id || null]
+    );
+  }
+
+  async findCdrs(params: { dateFrom?: string; dateTo?: string; offset: number; limit: number; tenant_id?: string }): Promise<any[]> {
+    const conditions: string[] = [];
+    const sqlParams: any[] = [];
+    let paramIdx = 1;
+
+    if (params.tenant_id) {
+      conditions.push(`tu.tenant_id = $${paramIdx++}`);
+      sqlParams.push(params.tenant_id);
+    }
+    if (params.dateFrom) {
+      conditions.push(`tu.timestamp >= $${paramIdx++}`);
+      sqlParams.push(params.dateFrom);
+    }
+    if (params.dateTo) {
+      conditions.push(`tu.timestamp <= $${paramIdx++}`);
+      sqlParams.push(params.dateTo);
+    }
+
+    let sql = `SELECT tu.*, c.caller_number, c.duration_seconds, c.status, c.outcome
+               FROM telecom_usage tu
+               LEFT JOIN calls c ON c.id = tu.call_id`;
+    if (conditions.length > 0) sql += ` WHERE ${conditions.join(' AND ')}`;
+    sql += ` ORDER BY tu.timestamp DESC LIMIT $${paramIdx++} OFFSET $${paramIdx++}`;
+    sqlParams.push(params.limit, params.offset);
+
+    return this.query(sql, sqlParams);
+  }
+
   async getOverview(since: string, until?: string): Promise<CallOverview> {
     const params: any[] = [since];
     let paramIndex = 2;
