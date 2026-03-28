@@ -13,6 +13,8 @@
 
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { getTenantId } from '../hooks/auth.js';
+import { isGodAdminEmail } from '../../services/repositories/admin.repository.js';
 
 const OutboundCallSchema = z.object({
   phone_number: z.string().min(10),
@@ -187,13 +189,15 @@ export async function callsRoutes(fastify: FastifyInstance) {
   // Save transcript for a call
   fastify.post('/transcripts', async (request, reply) => {
     const data = TranscriptSchema.parse(request.body);
+    const jwtPayload = (request as any).user || {};
+    const tenantId = getTenantId(jwtPayload);
     const db = (fastify as any).pg;
 
     const result = await db.query(
-      `INSERT INTO transcripts (call_id, transcript_text, language, segments, confidence)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO transcripts (call_id, transcript_text, language, segments, confidence, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id, call_id, created_at`,
-      [data.call_id, data.transcript_text, data.language || null, data.segments ? JSON.stringify(data.segments) : null, data.confidence ?? null]
+      [data.call_id, data.transcript_text, data.language || null, data.segments ? JSON.stringify(data.segments) : null, data.confidence ?? null, tenantId]
     );
 
     const row = result.rows[0];
@@ -237,32 +241,47 @@ export async function callsRoutes(fastify: FastifyInstance) {
   });
 
   // CDR records for billing (telecom_usage with joined call data)
-  fastify.get('/cdrs', async (request) => {
+  fastify.get('/cdrs', async (request, reply) => {
     const query = z.object({
       dateFrom: z.string().optional(),
       dateTo: z.string().optional(),
       offset: z.coerce.number().min(0).default(0),
       limit: z.coerce.number().min(1).max(1000).default(1000),
     }).parse(request.query);
+    const jwtPayload = (request as any).user || {};
+    const tenantId = getTenantId(jwtPayload);
     const db = (fastify as any).pg;
+
+    // Enforce tenant isolation — god admins can see all tenants
+    if (!tenantId && !isGodAdminEmail(jwtPayload.email)) {
+      return reply.status(403).send({ error: 'Tenant ID not found in token', code: 'TENANT_NOT_FOUND' });
+    }
 
     let sql = `SELECT tu.*, c.caller_number, c.duration_seconds, c.status, c.outcome
                FROM telecom_usage tu
-               LEFT JOIN calls c ON c.id = tu.call_id
-               ORDER BY tu.timestamp DESC`;
+               LEFT JOIN calls c ON c.id = tu.call_id`;
     const params: any[] = [];
     let paramIdx = 1;
+    let hasWhere = false;
+
+    // Tenant isolation filter (god admins see all)
+    if (tenantId) {
+      sql += ` WHERE tu.tenant_id = $${paramIdx++}`;
+      params.push(tenantId);
+      hasWhere = true;
+    }
 
     if (query.dateFrom) {
-      sql += ` WHERE tu.timestamp >= $${paramIdx++}`;
+      sql += hasWhere ? ` AND tu.timestamp >= $${paramIdx++}` : ` WHERE tu.timestamp >= $${paramIdx++}`;
       params.push(query.dateFrom);
+      hasWhere = true;
     }
     if (query.dateTo) {
-      sql += params.length > 0 ? ` AND tu.timestamp <= $${paramIdx++}` : ` WHERE tu.timestamp <= $${paramIdx++}`;
+      sql += hasWhere ? ` AND tu.timestamp <= $${paramIdx++}` : ` WHERE tu.timestamp <= $${paramIdx++}`;
       params.push(query.dateTo);
     }
 
-    sql += ` LIMIT $${paramIdx++} OFFSET $${paramIdx++}`;
+    sql += ` ORDER BY tu.timestamp DESC LIMIT $${paramIdx++} OFFSET $${paramIdx++}`;
     params.push(query.limit, query.offset);
 
     const result = await db.query(sql, params);
