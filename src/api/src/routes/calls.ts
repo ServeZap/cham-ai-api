@@ -248,7 +248,7 @@ export async function callsRoutes(fastify: FastifyInstance) {
 
     let sql = `SELECT tu.*, c.caller_number, c.duration_seconds, c.status, c.outcome
                FROM telecom_usage tu
-               LEFT JOIN calls c ON c.id::text = tu.call_id::text
+               LEFT JOIN calls c ON c.id = tu.call_id
                ORDER BY tu.timestamp DESC`;
     const params: any[] = [];
     let paramIdx = 1;

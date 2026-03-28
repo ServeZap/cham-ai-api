@@ -9,15 +9,19 @@ import { BaseRepository } from './base.js';
 /**
  * Parse ADMIN_EMAILS env var into a Set of lowercase emails.
  * God admins bypass ALL permission checks — no DB lookup needed.
+ * Cached at module level since the env var is immutable at runtime.
  */
+let _godAdmins: Set<string> | null = null;
 export function getGodAdmins(): Set<string> {
+  if (_godAdmins) return _godAdmins;
   const raw = process.env.ADMIN_EMAILS || '';
-  return new Set(
+  _godAdmins = new Set(
     raw
       .split(',')
       .map((e) => e.trim().toLowerCase())
       .filter(Boolean)
   );
+  return _godAdmins;
 }
 
 /**
@@ -54,18 +58,12 @@ export class AdminRepository extends BaseRepository {
     totalMissions: number;
     activeProviders: number;
   }> {
-    const users = await this.queryOne<{ count: string }>(
-      'SELECT COUNT(*) as count FROM profiles'
-    );
-    const calls = await this.queryOne<{ count: string }>(
-      'SELECT COUNT(*) as count FROM calls'
-    );
-    const missions = await this.queryOne<{ count: string }>(
-      'SELECT COUNT(*) as count FROM missions'
-    );
-    const providers = await this.queryOne<{ count: string }>(
-      'SELECT COUNT(DISTINCT provider_type) as count FROM provider_registry'
-    );
+    const [users, calls, missions, providers] = await Promise.all([
+      this.queryOne<{ count: string }>('SELECT COUNT(*) as count FROM profiles'),
+      this.queryOne<{ count: string }>('SELECT COUNT(*) as count FROM calls'),
+      this.queryOne<{ count: string }>('SELECT COUNT(*) as count FROM missions'),
+      this.queryOne<{ count: string }>('SELECT COUNT(DISTINCT provider_type) as count FROM provider_registry'),
+    ]);
 
     return {
       totalUsers: parseInt(users?.count || '0', 10),
@@ -99,6 +97,9 @@ export class AdminRepository extends BaseRepository {
       [userId, apiKey, label]
     );
 
-    return result || { id: '', api_key: '', label: '' };
+    if (!result) {
+      throw new Error('Failed to create API key — no row returned');
+    }
+    return result;
   }
 }

@@ -30,7 +30,7 @@ export async function eventsRoutes(fastify: FastifyInstance) {
     // Security: user can only subscribe to their own tenant's events
     // God admins bypass tenant isolation
     const userTenantId = jwtPayload.app_metadata?.tenant_id;
-    if (!isGodAdminEmail(email) && userTenantId && userTenantId !== tenantId) {
+    if (!isGodAdminEmail(email) && (!userTenantId || userTenantId !== tenantId)) {
       return reply.status(403).send({
         error: 'Cannot subscribe to events for another tenant',
         code: 'FORBIDDEN',

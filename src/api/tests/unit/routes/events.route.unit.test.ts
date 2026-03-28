@@ -18,6 +18,8 @@ describe('Events Routes', () => {
       },
     };
     mockReply = {
+      status: vi.fn().mockReturnThis(),
+      send: vi.fn(),
       raw: {
         writeHead: vi.fn(),
         write: vi.fn(),
@@ -85,7 +87,7 @@ describe('Events Routes', () => {
       }));
     });
 
-    it('allows subscription when user has no tenant_id (no restriction)', async () => {
+    it('denies subscription when user has no tenant_id', async () => {
       await handler(
         {
           query: { tenant: 't1' },
@@ -95,9 +97,7 @@ describe('Events Routes', () => {
         mockReply
       );
 
-      expect(mockReply.raw.writeHead).toHaveBeenCalledWith(200, expect.objectContaining({
-        'Content-Type': 'text/event-stream',
-      }));
+      expect(mockReply.status).toHaveBeenCalledWith(403);
     });
 
     it('passes types filter to query', async () => {
