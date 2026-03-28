@@ -22,8 +22,10 @@ vi.mock('openai', () => ({
 describe('Calls Routes', () => {
   let mockFastify: any;
   let mockReply: any;
+  const GOD_ADMIN_EMAIL = 'hector.eng@gmail.com';
 
   beforeEach(async () => {
+    process.env.ADMIN_EMAILS = GOD_ADMIN_EMAIL;
     mockFastify = {
       get: vi.fn(),
       post: vi.fn(),
@@ -53,6 +55,9 @@ describe('Calls Routes', () => {
             context: {},
           }),
         },
+      },
+      pg: {
+        query: vi.fn().mockResolvedValue({ rows: [{ id: '1', call_id: 'call-1', created_at: new Date().toISOString() }] }),
       },
     };
 
@@ -328,6 +333,60 @@ describe('Calls Routes', () => {
       await recordingHandler({ params: { id: 'CA987654321' } }, mockReply);
 
       expect(mockReply.status).toHaveBeenCalledWith(404);
+    });
+  });
+
+  describe('GET /cdrs', () => {
+    it('returns CDR records for a tenant user', async () => {
+      await callsRoutes(mockFastify);
+
+      const cdrsHandler = mockFastify.get.mock.calls.find((call: any[]) => call[0] === '/cdrs')[1];
+
+      const result = await cdrsHandler(
+        { query: {}, user: { sub: 'user-1', app_metadata: { tenant_id: 'tenant-1' } } },
+        mockReply
+      );
+
+      expect(result).toEqual({ data: [{ id: '1', call_id: 'call-1', created_at: expect.any(String) }] });
+      expect(mockFastify.pg.query).toHaveBeenCalledWith(
+        expect.stringContaining('WHERE tu.tenant_id = $1'),
+        expect.arrayContaining(['tenant-1'])
+      );
+    });
+
+    it('returns 403 when user has no tenant_id and is not a god admin', async () => {
+      await callsRoutes(mockFastify);
+
+      const cdrsHandler = mockFastify.get.mock.calls.find((call: any[]) => call[0] === '/cdrs')[1];
+
+      await cdrsHandler(
+        { query: {}, user: { sub: 'user-2', email: 'nonadmin@test.com' } },
+        mockReply
+      );
+
+      expect(mockReply.status).toHaveBeenCalledWith(403);
+      expect(mockReply.send).toHaveBeenCalledWith({
+        error: 'Tenant ID not found in token',
+        code: 'TENANT_NOT_FOUND',
+      });
+    });
+
+    it('allows god admins to bypass tenant isolation', async () => {
+      await callsRoutes(mockFastify);
+
+      const cdrsHandler = mockFastify.get.mock.calls.find((call: any[]) => call[0] === '/cdrs')[1];
+
+      const result = await cdrsHandler(
+        { query: {}, user: { sub: 'god-1', email: GOD_ADMIN_EMAIL } },
+        mockReply
+      );
+
+      expect(result).toEqual({ data: [{ id: '1', call_id: 'call-1', created_at: expect.any(String) }] });
+      // God admin query should NOT have a WHERE tenant_id clause
+      expect(mockFastify.pg.query).toHaveBeenCalledWith(
+        expect.not.stringContaining('WHERE tu.tenant_id'),
+        expect.any(Array)
+      );
     });
   });
 });
