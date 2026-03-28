@@ -6,6 +6,8 @@ Este arquivo fornece orientação ao Claude Code (claude.ai/code) ao trabalhar c
 
 Cham.ai é uma plataforma de Voice AI (produto ServeZap) que habilita agentes de voz com IA para comunicações empresariais — chamadas inbound/outbound, processamento de fala e IA conversacional. Atualmente na Fase de Fundação, tendo a A7Protect como primeiro caso de cliente.
 
+**Blueprint completo do sistema:** `docs/MASTER_BLUEPRINT.md` — visão geral, arquitetura, providers, governança de custo, AI Factory, e diretrizes de engenharia.
+
 ## Estrutura do Repositório
 
 ```
