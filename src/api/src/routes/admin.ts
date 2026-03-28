@@ -10,12 +10,8 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { z } from 'zod';
 import { isGodAdminEmail } from '../../services/repositories/admin.repository.js';
-
-const GenerateApiKeySchema = z.object({
-  label: z.string().min(1).default('AI Agent'),
-});
+import { GenerateApiKeySchema } from '../../../../contracts/src/index.js';
 
 export async function adminRoutes(fastify: FastifyInstance) {
   // Check if user is admin

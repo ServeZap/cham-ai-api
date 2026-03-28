@@ -15,7 +15,7 @@ cham-ai/
 ├── frontend/          # Dashboard SPA (Vite + React + TypeScript)
 ├── backend/
 │   ├── runtime/       # Serviços de produção (futuro)
-│   ├── contracts/     # Schemas e eventos versionados (futuro)
+│   ├── contracts/     # Schemas, eventos e interfaces de provider versionados
 │   ├── providers/     # Implementações de providers (futuro)
 │   ├── docs/          # Documentação de arquitetura (PT/EN)
 │   ├── src/api/       # Servidor API Fastify (atual)
@@ -118,7 +118,7 @@ Rota adicional: `/api/v1/clawdtalk` para integração com o provedor de telefoni
 - **Estado:** React Query para estado do servidor, React Context para autenticação
 
 ### Sistema de Interfaces de Provider (Anti Lock-In)
-O core nunca chama provedores externos diretamente. Todas as integrações passam por interfaces tipadas definidas em `frontend/src/types/providers.ts`:
+O core nunca chama provedores externos diretamente. Todas as integrações passam por interfaces tipadas definidas em `contracts/src/providers/` (fonte única de verdade) e espelhadas em `frontend/src/types/providers.ts`:
 - `TelephonyProvider` — ClawdTalk, Twilio, Vonage, SIP
 - `SpeechProvider` — STT/TTS (Whisper, Deepgram, etc.)
 - `AgentEngine` — OpenClaw, LangGraph, Semantic Kernel

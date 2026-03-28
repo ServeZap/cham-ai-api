@@ -9,18 +9,10 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { z } from 'zod';
-
-const CompleteSchema = z.object({
-  prompt: z.string().min(1),
-  session_id: z.string().uuid().optional(),
-  context: z.record(z.any()).optional(),
-});
-
-const ToolSchema = z.object({
-  tool: z.string().min(1),
-  parameters: z.record(z.any()),
-});
+import {
+  CompleteSchema,
+  ToolCallSchema,
+} from '../../../../contracts/src/index.js';
 
 export async function aiRoutes(fastify: FastifyInstance) {
   // Complete text with AI
@@ -89,7 +81,7 @@ export async function aiRoutes(fastify: FastifyInstance) {
 
   // Execute AI tool
   fastify.post('/tools', async (request, reply) => {
-    const data = ToolSchema.parse(request.body);
+    const data = ToolCallSchema.parse(request.body);
     const startTime = Date.now();
 
     // Available tools:

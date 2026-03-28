@@ -9,21 +9,12 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { z } from 'zod';
 import { getTenantId } from '../hooks/auth.js';
 import { isGodAdminEmail } from '../../services/repositories/admin.repository.js';
-
-// ── Schemas ──────────────────────────────────────────────────────
-
-const SignedUrlSchema = z.object({
-  path: z.string().min(1, 'Path é obrigatório'),
-  expiresIn: z.number().int().min(1).max(86400).default(3600),
-});
-
-const SignedUrlsSchema = z.object({
-  paths: z.array(z.string().min(1)).min(1, 'Paths é obrigatório'),
-  expiresIn: z.number().int().min(1).max(86400).default(3600),
-});
+import {
+  SignedUrlSchema,
+  SignedUrlsSchema,
+} from '../../../../contracts/src/index.js';
 
 // ── Helpers ──────────────────────────────────────────────────────
 

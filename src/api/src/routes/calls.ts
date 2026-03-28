@@ -12,42 +12,16 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { z } from 'zod';
 import { getTenantId } from '../hooks/auth.js';
 import { isGodAdminEmail } from '../../services/repositories/admin.repository.js';
-
-const OutboundCallSchema = z.object({
-  phone_number: z.string().min(10),
-  assistant_id: z.string().uuid(),
-  metadata: z.record(z.any()).optional(),
-});
-
-const InboundCallSchema = z.object({
-  CallSid: z.string().optional(),
-  From: z.string().optional(),
-  To: z.string().optional(),
-});
-
-const ListCallsSchema = z.object({
-  page: z.coerce.number().min(1).default(1),
-  limit: z.coerce.number().min(1).max(100).default(50),
-  status: z.string().optional(),
-  since: z.string().optional(),
-  until: z.string().optional(),
-});
-
-const OverviewSchema = z.object({
-  since: z.string().min(1),
-  until: z.string().optional(),
-});
-
-const TranscriptSchema = z.object({
-  call_id: z.string().min(1),
-  transcript_text: z.string().min(1),
-  language: z.string().optional(),
-  segments: z.any().optional(),
-  confidence: z.number().nullable().optional(),
-});
+import {
+  OutboundCallSchema,
+  InboundCallSchema,
+  ListCallsSchema,
+  OverviewSchema,
+  TranscriptSchema,
+  CDRQuerySchema,
+} from '../../../../contracts/src/index.js';
 
 export async function callsRoutes(fastify: FastifyInstance) {
   // Handle inbound call (webhook from Twilio/Vonage)
@@ -217,12 +191,7 @@ export async function callsRoutes(fastify: FastifyInstance) {
 
   // CDR records for billing (telecom_usage with joined call data)
   fastify.get('/cdrs', async (request, reply) => {
-    const query = z.object({
-      dateFrom: z.string().optional(),
-      dateTo: z.string().optional(),
-      offset: z.coerce.number().min(0).default(0),
-      limit: z.coerce.number().min(1).max(1000).default(1000),
-    }).parse(request.query);
+    const query = CDRQuerySchema.parse(request.query);
     const jwtPayload = (request as any).user || {};
     const tenantId = getTenantId(jwtPayload);
 

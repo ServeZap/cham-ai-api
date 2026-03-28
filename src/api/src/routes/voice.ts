@@ -8,14 +8,7 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { z } from 'zod';
-
-const ConverseSchema = z.object({
-  assistant_id: z.string().uuid(),
-  session_id: z.string().uuid().optional(),
-  audio: z.string().optional(), // base64 encoded audio
-  text: z.string().optional(),  // text input
-});
+import { ConverseSchema } from '../../../../contracts/src/index.js';
 
 export async function voiceRoutes(fastify: FastifyInstance) {
   // Voice conversation endpoint
