@@ -12,8 +12,11 @@ describe('Users Routes', () => {
     mockFastify = {
       get: vi.fn((path, handler) => { getHandlers.push({ path, handler }); }),
       delete: vi.fn((path, handler) => { deleteHandlers.push({ path, handler }); }),
-      pg: {
-        query: vi.fn().mockResolvedValue({ rows: [] }),
+      repositories: {
+        users: {
+          getTenantId: vi.fn().mockResolvedValue(null),
+          deleteProfile: vi.fn().mockResolvedValue(undefined),
+        },
       },
     };
 
@@ -22,7 +25,7 @@ describe('Users Routes', () => {
 
   describe('GET /tenant-id', () => {
     it('returns tenant_id for authenticated user', async () => {
-      mockFastify.pg.query = vi.fn().mockResolvedValue({ rows: [{ tenant_id: 'tenant-123' }] });
+      mockFastify.repositories.users.getTenantId = vi.fn().mockResolvedValue('tenant-123');
 
       const handler = getHandlers.find((h) => h.path === '/tenant-id')?.handler;
       const mockReply = { status: vi.fn().mockReturnThis(), send: vi.fn() };
@@ -45,7 +48,7 @@ describe('Users Routes', () => {
     });
 
     it('returns 404 when profile not found', async () => {
-      mockFastify.pg.query = vi.fn().mockResolvedValue({ rows: [] });
+      mockFastify.repositories.users.getTenantId = vi.fn().mockResolvedValue(null);
 
       const handler = getHandlers.find((h) => h.path === '/tenant-id')?.handler;
       const mockReply = { status: vi.fn().mockReturnThis(), send: vi.fn() };
@@ -68,10 +71,7 @@ describe('Users Routes', () => {
         {}
       );
 
-      expect(mockFastify.pg.query).toHaveBeenCalledWith(
-        expect.stringContaining('DELETE FROM profiles'),
-        ['user-uuid']
-      );
+      expect(mockFastify.repositories.users.deleteProfile).toHaveBeenCalledWith('user-uuid');
       expect(result.deleted).toBe(true);
     });
 

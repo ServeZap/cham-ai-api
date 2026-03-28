@@ -9,8 +9,10 @@ describe('Demo Routes', () => {
     postHandlers = [];
     mockFastify = {
       post: vi.fn((path, handler) => { postHandlers.push({ path, handler }); }),
-      pg: {
-        query: vi.fn().mockResolvedValue({ rows: [] }),
+      repositories: {
+        demo: {
+          insertRequest: vi.fn().mockResolvedValue(undefined),
+        },
       },
     };
 
@@ -27,10 +29,13 @@ describe('Demo Routes', () => {
         mockReply
       );
 
-      expect(mockFastify.pg.query).toHaveBeenCalledWith(
-        expect.stringContaining('INSERT INTO demo_requests'),
-        ['Test', 'test@example.com', null, null, null]
-      );
+      expect(mockFastify.repositories.demo.insertRequest).toHaveBeenCalledWith({
+        name: 'Test',
+        email: 'test@example.com',
+        phone: null,
+        company: null,
+        message: null,
+      });
       expect(mockReply.status).toHaveBeenCalledWith(201);
       expect(mockReply.send).toHaveBeenCalledWith({ success: true });
     });

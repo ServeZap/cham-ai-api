@@ -12,6 +12,7 @@
 
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { isGodAdminEmail } from '../../services/repositories/admin.repository.js';
 
 const CreateConfigSchema = z.object({
   channel: z.enum(['webhook', 'email']),
@@ -26,6 +27,24 @@ const ToggleConfigSchema = z.object({
 export async function failoverRoutes(fastify: FastifyInstance) {
   const getRepo = () => (fastify as any).repositories.failover;
 
+  /**
+   * Admin authorization guard for mutation endpoints.
+   * Returns true if the request should be blocked (403 was already sent).
+   * God admins (ADMIN_EMAILS env) bypass the DB check.
+   */
+  const requireAdmin = async (request: any, reply: any): Promise<boolean> => {
+    const jwtPayload = request.user || {};
+    const email = jwtPayload.email;
+    const userId = jwtPayload.sub;
+    const adminRepo = (fastify as any).repositories.admin;
+
+    if (!isGodAdminEmail(email) && !(await adminRepo.isAdmin(userId))) {
+      reply.status(403).send({ error: 'Forbidden — admin required', code: 'FORBIDDEN' });
+      return true;
+    }
+    return false;
+  };
+
   // List notification configs
   fastify.get('/configs', async () => {
     const repo = getRepo();
@@ -35,6 +54,9 @@ export async function failoverRoutes(fastify: FastifyInstance) {
 
   // Create notification config
   fastify.post('/configs', async (request, reply) => {
+    const blocked = await requireAdmin(request, reply);
+    if (blocked) return;
+
     const data = CreateConfigSchema.parse(request.body);
     const repo = getRepo();
 
@@ -49,6 +71,9 @@ export async function failoverRoutes(fastify: FastifyInstance) {
 
   // Toggle config
   fastify.patch<{ Params: { id: string } }>('/configs/:id', async (request, reply) => {
+    const blocked = await requireAdmin(request, reply);
+    if (blocked) return;
+
     const { id } = request.params;
     const { enabled } = ToggleConfigSchema.parse(request.body);
     const repo = getRepo();
@@ -59,6 +84,9 @@ export async function failoverRoutes(fastify: FastifyInstance) {
 
   // Delete config
   fastify.delete<{ Params: { id: string } }>('/configs/:id', async (request, reply) => {
+    const blocked = await requireAdmin(request, reply);
+    if (blocked) return;
+
     const { id } = request.params;
     const repo = getRepo();
 

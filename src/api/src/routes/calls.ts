@@ -13,6 +13,8 @@
 
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { getTenantId } from '../hooks/auth.js';
+import { isGodAdminEmail } from '../../services/repositories/admin.repository.js';
 
 const OutboundCallSchema = z.object({
   phone_number: z.string().min(10),
@@ -187,85 +189,56 @@ export async function callsRoutes(fastify: FastifyInstance) {
   // Save transcript for a call
   fastify.post('/transcripts', async (request, reply) => {
     const data = TranscriptSchema.parse(request.body);
-    const db = (fastify as any).pg;
+    const jwtPayload = (request as any).user || {};
+    const tenantId = getTenantId(jwtPayload);
+    const repo = (fastify as any).repositories.calls;
 
-    const result = await db.query(
-      `INSERT INTO transcripts (call_id, transcript_text, language, segments, confidence)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, call_id, created_at`,
-      [data.call_id, data.transcript_text, data.language || null, data.segments ? JSON.stringify(data.segments) : null, data.confidence ?? null]
-    );
-
-    const row = result.rows[0];
+    const row = await repo.insertTranscript({ ...data, tenant_id: tenantId });
     return reply.status(201).send(row);
   });
 
   // Get transcript for a call
   fastify.get('/transcripts/:callId', async (request, reply) => {
     const { callId } = request.params as { callId: string };
-    const db = (fastify as any).pg;
+    const repo = (fastify as any).repositories.calls;
 
-    const result = await db.query(
-      `SELECT transcript_text, language, segments, created_at, confidence
-       FROM transcripts
-       WHERE call_id = $1
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [callId]
-    );
-
-    const row = result.rows[0] || null;
+    const row = await repo.findTranscript(callId);
     return { data: row };
   });
 
   // Get transcribe job audio_ref for a call
   fastify.get('/transcribe-jobs/:callId/audio', async (request, reply) => {
     const { callId } = request.params as { callId: string };
-    const db = (fastify as any).pg;
+    const repo = (fastify as any).repositories.calls;
 
-    const result = await db.query(
-      `SELECT audio_ref
-       FROM transcribe_jobs
-       WHERE call_id = $1 AND audio_ref IS NOT NULL
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [callId]
-    );
-
-    const row = result.rows[0] || null;
+    const row = await repo.findTranscribeJobAudio(callId);
     return { data: row };
   });
 
   // CDR records for billing (telecom_usage with joined call data)
-  fastify.get('/cdrs', async (request) => {
+  fastify.get('/cdrs', async (request, reply) => {
     const query = z.object({
       dateFrom: z.string().optional(),
       dateTo: z.string().optional(),
       offset: z.coerce.number().min(0).default(0),
       limit: z.coerce.number().min(1).max(1000).default(1000),
     }).parse(request.query);
-    const db = (fastify as any).pg;
+    const jwtPayload = (request as any).user || {};
+    const tenantId = getTenantId(jwtPayload);
 
-    let sql = `SELECT tu.*, c.caller_number, c.duration_seconds, c.status, c.outcome
-               FROM telecom_usage tu
-               LEFT JOIN calls c ON c.id = tu.call_id
-               ORDER BY tu.timestamp DESC`;
-    const params: any[] = [];
-    let paramIdx = 1;
-
-    if (query.dateFrom) {
-      sql += ` WHERE tu.timestamp >= $${paramIdx++}`;
-      params.push(query.dateFrom);
-    }
-    if (query.dateTo) {
-      sql += params.length > 0 ? ` AND tu.timestamp <= $${paramIdx++}` : ` WHERE tu.timestamp <= $${paramIdx++}`;
-      params.push(query.dateTo);
+    // Enforce tenant isolation — god admins can see all tenants
+    if (!tenantId && !isGodAdminEmail(jwtPayload.email)) {
+      return reply.status(403).send({ error: 'Tenant ID not found in token', code: 'TENANT_NOT_FOUND' });
     }
 
-    sql += ` LIMIT $${paramIdx++} OFFSET $${paramIdx++}`;
-    params.push(query.limit, query.offset);
-
-    const result = await db.query(sql, params);
-    return { data: result.rows };
+    const repo = (fastify as any).repositories.calls;
+    const rows = await repo.findCdrs({
+      dateFrom: query.dateFrom,
+      dateTo: query.dateTo,
+      offset: query.offset,
+      limit: query.limit,
+      tenant_id: tenantId,
+    });
+    return { data: rows };
   });
 }

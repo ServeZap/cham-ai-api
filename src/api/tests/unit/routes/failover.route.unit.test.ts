@@ -7,8 +7,10 @@ describe('Failover Routes', () => {
   let postHandlers: any[];
   let patchHandlers: any[];
   let deleteHandlers: any[];
+  const GOD_ADMIN_EMAIL = 'hector.eng@gmail.com';
 
   beforeEach(async () => {
+    process.env.ADMIN_EMAILS = GOD_ADMIN_EMAIL;
     getHandlers = [];
     postHandlers = [];
     patchHandlers = [];
@@ -29,6 +31,9 @@ describe('Failover Routes', () => {
           insertConfig: vi.fn().mockResolvedValue({ id: '2', channel: 'email', target: 'ops@test.com', enabled: true }),
           toggleConfig: vi.fn().mockResolvedValue(undefined),
           deleteConfig: vi.fn().mockResolvedValue(true),
+        },
+        admin: {
+          isAdmin: vi.fn().mockResolvedValue(false),
         },
       },
     };
@@ -68,8 +73,11 @@ describe('Failover Routes', () => {
       const handler = postHandlers.find((h) => h.path === '/configs')?.handler;
       const mockReply = { status: vi.fn().mockReturnThis(), send: vi.fn() };
 
+      // Mock admin repo to allow this user
+      mockFastify.repositories.admin.isAdmin.mockResolvedValue(true);
+
       await handler(
-        { body: { channel: 'email', target: 'ops@test.com', enabled: true } },
+        { body: { channel: 'email', target: 'ops@test.com', enabled: true }, user: { sub: 'user-1', email: 'user@test.com' } },
         mockReply
       );
 
@@ -83,17 +91,85 @@ describe('Failover Routes', () => {
 
     it('rejects missing channel', async () => {
       const handler = postHandlers.find((h) => h.path === '/configs')?.handler;
+      // Mock admin repo to allow this user
+      mockFastify.repositories.admin.isAdmin.mockResolvedValue(true);
       await expect(
-        handler({ body: { target: 'https://example.com' } }, {})
+        handler({ body: { target: 'https://example.com' }, user: { sub: 'user-1', email: 'user@test.com' } }, {})
       ).rejects.toThrow();
+    });
+
+    it('returns 403 for non-admin users', async () => {
+      const handler = postHandlers.find((h) => h.path === '/configs')?.handler;
+      const mockReply = { status: vi.fn().mockReturnThis(), send: vi.fn().mockReturnThis() };
+
+      mockFastify.repositories.admin.isAdmin.mockResolvedValue(false);
+
+      await handler(
+        { body: { channel: 'email', target: 'ops@test.com', enabled: true }, user: { sub: 'user-2', email: 'nonadmin@test.com' } },
+        mockReply
+      );
+
+      expect(mockReply.status).toHaveBeenCalledWith(403);
+      expect(mockReply.send).toHaveBeenCalledWith({ error: 'Forbidden — admin required', code: 'FORBIDDEN' });
+      expect(mockFastify.repositories.failover.insertConfig).not.toHaveBeenCalled();
+    });
+
+    it('allows god admins to bypass admin check', async () => {
+      const handler = postHandlers.find((h) => h.path === '/configs')?.handler;
+      const mockReply = { status: vi.fn().mockReturnThis(), send: vi.fn().mockReturnThis() };
+
+      mockFastify.repositories.admin.isAdmin.mockResolvedValue(false);
+
+      await handler(
+        { body: { channel: 'email', target: 'ops@test.com', enabled: true }, user: { sub: 'god-1', email: 'hector.eng@gmail.com' } },
+        mockReply
+      );
+
+      expect(mockReply.status).toHaveBeenCalledWith(201);
+      expect(mockFastify.repositories.failover.insertConfig).toHaveBeenCalled();
+      // isAdmin should NOT be called for god admins (they bypass DB check)
+      expect(mockFastify.repositories.admin.isAdmin).not.toHaveBeenCalled();
     });
   });
 
   describe('PATCH /configs/:id', () => {
     it('toggles config enabled state', async () => {
       const handler = patchHandlers.find((h) => h.path === '/configs/:id')?.handler;
+
+      mockFastify.repositories.admin.isAdmin.mockResolvedValue(true);
+
       const result = await handler(
-        { params: { id: '1' }, body: { enabled: false } },
+        { params: { id: '1' }, body: { enabled: false }, user: { sub: 'user-1', email: 'user@test.com' } },
+        {}
+      );
+
+      expect(mockFastify.repositories.failover.toggleConfig).toHaveBeenCalledWith('1', false);
+      expect(result).toEqual({ id: '1', enabled: false });
+    });
+
+    it('returns 403 for non-admin users', async () => {
+      const handler = patchHandlers.find((h) => h.path === '/configs/:id')?.handler;
+      const mockReply = { status: vi.fn().mockReturnThis(), send: vi.fn().mockReturnThis() };
+
+      mockFastify.repositories.admin.isAdmin.mockResolvedValue(false);
+
+      await handler(
+        { params: { id: '1' }, body: { enabled: false }, user: { sub: 'user-2', email: 'nonadmin@test.com' } },
+        mockReply
+      );
+
+      expect(mockReply.status).toHaveBeenCalledWith(403);
+      expect(mockReply.send).toHaveBeenCalledWith({ error: 'Forbidden — admin required', code: 'FORBIDDEN' });
+      expect(mockFastify.repositories.failover.toggleConfig).not.toHaveBeenCalled();
+    });
+
+    it('allows god admins to bypass admin check', async () => {
+      const handler = patchHandlers.find((h) => h.path === '/configs/:id')?.handler;
+
+      mockFastify.repositories.admin.isAdmin.mockResolvedValue(false);
+
+      const result = await handler(
+        { params: { id: '1' }, body: { enabled: false }, user: { sub: 'god-1', email: 'hector.eng@gmail.com' } },
         {}
       );
 
@@ -105,8 +181,41 @@ describe('Failover Routes', () => {
   describe('DELETE /configs/:id', () => {
     it('deletes a config', async () => {
       const handler = deleteHandlers.find((h) => h.path === '/configs/:id')?.handler;
+
+      mockFastify.repositories.admin.isAdmin.mockResolvedValue(true);
+
       const result = await handler(
-        { params: { id: '1' } },
+        { params: { id: '1' }, user: { sub: 'user-1', email: 'user@test.com' } },
+        {}
+      );
+
+      expect(mockFastify.repositories.failover.deleteConfig).toHaveBeenCalledWith('1');
+      expect(result.deleted).toBe(true);
+    });
+
+    it('returns 403 for non-admin users', async () => {
+      const handler = deleteHandlers.find((h) => h.path === '/configs/:id')?.handler;
+      const mockReply = { status: vi.fn().mockReturnThis(), send: vi.fn().mockReturnThis() };
+
+      mockFastify.repositories.admin.isAdmin.mockResolvedValue(false);
+
+      await handler(
+        { params: { id: '1' }, user: { sub: 'user-2', email: 'nonadmin@test.com' } },
+        mockReply
+      );
+
+      expect(mockReply.status).toHaveBeenCalledWith(403);
+      expect(mockReply.send).toHaveBeenCalledWith({ error: 'Forbidden — admin required', code: 'FORBIDDEN' });
+      expect(mockFastify.repositories.failover.deleteConfig).not.toHaveBeenCalled();
+    });
+
+    it('allows god admins to bypass admin check', async () => {
+      const handler = deleteHandlers.find((h) => h.path === '/configs/:id')?.handler;
+
+      mockFastify.repositories.admin.isAdmin.mockResolvedValue(false);
+
+      const result = await handler(
+        { params: { id: '1' }, user: { sub: 'god-1', email: 'hector.eng@gmail.com' } },
         {}
       );
 
