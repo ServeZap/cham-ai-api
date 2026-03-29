@@ -1,7 +1,8 @@
 /**
  * AI Routes
  *
- * AI Engine endpoints (LangGraph / OpenAI)
+ * AI Engine endpoints — proxies to OpenClaw when AGENT_RUNTIME_URL is set,
+ * falls back to direct OpenAI otherwise.
  *
  * @route POST /api/v1/ai/complete      - Complete text with AI
  * @route POST /api/v1/ai/tools         - Execute AI tool
@@ -14,15 +15,30 @@ import {
   ToolCallSchema,
 } from '../../../../contracts/src/index.js';
 
+/** Whether OpenClaw is configured as the AI backend */
+function isOpenClawConfigured(): boolean {
+  return !!process.env.AGENT_RUNTIME_URL;
+}
+
+/** Resolve the AI model name based on active backend */
+function resolveModel(): string {
+  if (isOpenClawConfigured()) {
+    return process.env.OPENCLAW_MODEL || 'nadirclaw';
+  }
+  return process.env.AI_MODEL || 'gpt-4o';
+}
+
 export async function aiRoutes(fastify: FastifyInstance) {
   // Complete text with AI
   fastify.post('/complete', async (request, reply) => {
     const data = CompleteSchema.parse(request.body);
     const startTime = Date.now();
 
-    if (!process.env.OPENAI_API_KEY) {
+    const usingOpenClaw = isOpenClawConfigured();
+
+    if (!process.env.OPENAI_API_KEY && !usingOpenClaw) {
       return {
-        text: 'AI service not configured. Set OPENAI_API_KEY.',
+        text: 'AI service not configured. Set OPENAI_API_KEY or AGENT_RUNTIME_URL.',
         usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
         latency_ms: 0,
       };
@@ -30,7 +46,13 @@ export async function aiRoutes(fastify: FastifyInstance) {
 
     try {
       const OpenAI = (await import('openai')).default;
-      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY || 'no-key',
+        ...(usingOpenClaw ? { baseURL: process.env.AGENT_RUNTIME_URL } : {}),
+      });
+
+      const model = resolveModel();
+      fastify.log.info({ model, provider: usingOpenClaw ? 'openclaw' : 'openai', sessionId: data.session_id }, '[AI] Complete');
 
       const messages: any[] = [
         {
@@ -52,25 +74,29 @@ export async function aiRoutes(fastify: FastifyInstance) {
       messages.push({ role: 'user', content: data.prompt });
 
       const completion = await openai.chat.completions.create({
-        model: 'gpt-4o',
+        model,
         messages,
-        temperature: 0.7,
+        temperature: data.context?.temperature ?? 0.7,
       });
 
-      const text = completion.choices[0]?.message?.content || '';
+      const choice = completion.choices[0];
+      const text = choice?.message?.content || '';
       const usage = completion.usage;
 
       return {
         text,
+        tool_calls: choice?.message?.tool_calls ?? null,
+        finish_reason: choice?.finish_reason ?? null,
         usage: {
           prompt_tokens: usage?.prompt_tokens || 0,
           completion_tokens: usage?.completion_tokens || 0,
           total_tokens: usage?.total_tokens || 0,
         },
         latency_ms: Date.now() - startTime,
+        provider: usingOpenClaw ? 'openclaw' : 'openai',
       };
     } catch (error: any) {
-      fastify.log.error('[AI] Complete error:', error);
+      fastify.log.error({ provider: usingOpenClaw ? 'openclaw' : 'openai', err: error.message }, '[AI] Complete error');
       return reply.status(503).send({
         error: 'AI model unavailable',
         code: 'AI_MODEL_UNAVAILABLE',
@@ -92,7 +118,7 @@ export async function aiRoutes(fastify: FastifyInstance) {
     // - create_lead (A7Protect)
     // - open_incident (A7Protect)
 
-    // TODO: Implement tool execution via LangGraph or direct integration
+    // TODO: Implement tool execution via OpenClaw or direct integration
 
     return {
       result: {},
