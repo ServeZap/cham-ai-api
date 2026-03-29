@@ -17,13 +17,12 @@ describe('Auth Hook', () => {
   });
 
   describe('Skip Authentication', () => {
-    it('should skip auth for /api/v1/voice/converse', async () => {
+    it('should require auth for /api/v1/voice/converse (cost governance)', async () => {
       mockRequest.url = '/api/v1/voice/converse';
 
       await authHook(mockRequest, mockReply);
 
-      expect(mockRequest.jwtVerify).not.toHaveBeenCalled();
-      expect(mockReply.send).not.toHaveBeenCalled();
+      expect(mockRequest.jwtVerify).toHaveBeenCalled();
     });
 
     it('should skip auth for /api/v1/calls/inbound', async () => {
@@ -35,12 +34,12 @@ describe('Auth Hook', () => {
       expect(mockReply.send).not.toHaveBeenCalled();
     });
 
-    it('should skip auth for paths starting with /api/v1/voice/converse', async () => {
+    it('should require auth for /api/v1/voice/converse with query params', async () => {
       mockRequest.url = '/api/v1/voice/converse?param=value';
 
       await authHook(mockRequest, mockReply);
 
-      expect(mockRequest.jwtVerify).not.toHaveBeenCalled();
+      expect(mockRequest.jwtVerify).toHaveBeenCalled();
     });
 
     it('should skip auth for paths starting with /api/v1/calls/inbound', async () => {
@@ -186,12 +185,12 @@ describe('Auth Hook', () => {
     });
 
     it('should not skip partial matches of skip paths', async () => {
-      mockRequest.url = '/api/v1/voice/converse-extra';
+      mockRequest.url = '/api/v1/demo/request';
 
       await authHook(mockRequest, mockReply);
 
-      // Should not skip because it starts with /api/v1/voice/converse
-      expect(mockRequest.jwtVerify).not.toHaveBeenCalled();
+      // /api/v1/demo/request does NOT start with /api/v1/demo/requests (shorter string)
+      expect(mockRequest.jwtVerify).toHaveBeenCalled();
     });
 
     it('should require auth for /api/v1/voice/stream/:id', async () => {

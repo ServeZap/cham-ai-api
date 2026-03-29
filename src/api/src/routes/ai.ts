@@ -118,10 +118,62 @@ export async function aiRoutes(fastify: FastifyInstance) {
     // - create_lead (A7Protect)
     // - open_incident (A7Protect)
 
-    // TODO: Implement tool execution via OpenClaw or direct integration
+    // When OpenClaw is configured and conversation context is provided,
+    // send the tool result back to OpenClaw for continuation.
+    if (isOpenClawConfigured() && data.messages && data.messages.length > 0) {
+      try {
+        const OpenAI = (await import('openai')).default;
+        const openai = new OpenAI({
+          apiKey: process.env.OPENAI_API_KEY || 'no-key',
+          baseURL: process.env.AGENT_RUNTIME_URL,
+        });
 
+        const model = resolveModel();
+        fastify.log.info(
+          { model, tool: data.tool, toolCallId: data.tool_call_id, sessionId: data.session_id },
+          '[AI] Tool result → OpenClaw'
+        );
+
+        // Build the tool result message in OpenAI format
+        const toolResultMessage: any = {
+          role: 'tool',
+          tool_call_id: data.tool_call_id || data.tool,
+          content: JSON.stringify(data.parameters),
+        };
+
+        const messages = [...data.messages, toolResultMessage];
+
+        const completion = await openai.chat.completions.create({
+          model,
+          messages,
+          temperature: 0.7,
+        });
+
+        const choice = completion.choices[0];
+
+        return {
+          result: {
+            text: choice?.message?.content || '',
+            tool_calls: choice?.message?.tool_calls ?? null,
+            finish_reason: choice?.finish_reason ?? null,
+          },
+          tool: data.tool,
+          execution_time_ms: Date.now() - startTime,
+          provider: 'openclaw',
+        };
+      } catch (error: any) {
+        fastify.log.error({ tool: data.tool, err: error.message }, '[AI] Tool execution error');
+        return reply.status(503).send({
+          error: 'Tool execution failed',
+          code: 'TOOL_EXECUTION_FAILED',
+          details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+        });
+      }
+    }
+
+    // Fallback: return parameters as-is (no AI continuation)
     return {
-      result: {},
+      result: data.parameters,
       tool: data.tool,
       execution_time_ms: Date.now() - startTime,
     };

@@ -23,6 +23,11 @@ vi.mock('openai', () => ({
           text: 'Mock transcription',
         }),
       },
+      speech: {
+        create: vi.fn().mockResolvedValue({
+          arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+        }),
+      },
     };
   },
 }));
@@ -200,7 +205,10 @@ describe('Voice Routes', () => {
       expect(typeof result.latency_ms).toBe('number');
     });
 
-    it('should return null response_audio when not applicable', async () => {
+    it('should return base64 response_audio when TTS is available', async () => {
+      const originalKey = process.env.OPENAI_API_KEY;
+      process.env.OPENAI_API_KEY = 'test-key';
+
       await voiceRoutes(mockFastify);
 
       const converseHandler = mockFastify.post.mock.calls.find((call: any[]) => call[0] === '/converse')[1];
@@ -212,7 +220,50 @@ describe('Voice Routes', () => {
 
       const result = await converseHandler({ body: requestData }, mockReply);
 
+      expect(result.response_audio).toBeDefined();
+      expect(result.response_audio).not.toBeNull();
+      expect(typeof result.response_audio).toBe('string');
+
+      process.env.OPENAI_API_KEY = originalKey;
+    });
+
+    it('should return null response_audio when no AI backend configured', async () => {
+      const originalKey = process.env.OPENAI_API_KEY;
+      const originalUrl = process.env.AGENT_RUNTIME_URL;
+      delete process.env.OPENAI_API_KEY;
+      delete process.env.AGENT_RUNTIME_URL;
+
+      await voiceRoutes(mockFastify);
+
+      const converseHandler = mockFastify.post.mock.calls.find((call: any[]) => call[0] === '/converse')[1];
+
+      const requestData = {
+        assistant_id: '550e8400-e29b-41d4-a716-446655440000',
+        text: 'No backend available',
+      };
+
+      const result = await converseHandler({ body: requestData }, mockReply);
+
       expect(result.response_audio).toBeNull();
+
+      if (originalKey) process.env.OPENAI_API_KEY = originalKey;
+      if (originalUrl) process.env.AGENT_RUNTIME_URL = originalUrl;
+    });
+
+    it('should include provider field in response', async () => {
+      await voiceRoutes(mockFastify);
+
+      const converseHandler = mockFastify.post.mock.calls.find((call: any[]) => call[0] === '/converse')[1];
+
+      const requestData = {
+        assistant_id: '550e8400-e29b-41d4-a716-446655440000',
+        text: 'Test provider field',
+      };
+
+      const result = await converseHandler({ body: requestData }, mockReply);
+
+      expect(result.provider).toBeDefined();
+      expect(['openai', 'openclaw']).toContain(result.provider);
     });
   });
 

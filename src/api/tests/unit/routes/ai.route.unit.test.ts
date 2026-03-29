@@ -26,6 +26,7 @@ describe('AI Routes', () => {
       put: vi.fn(),
       patch: vi.fn(),
       delete: vi.fn(),
+      log: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
     };
 
     mockReply = {
@@ -125,7 +126,7 @@ describe('AI Routes', () => {
   });
 
   describe('POST /tools', () => {
-    it('should execute AI tool', async () => {
+    it('should return parameters as fallback when no OpenClaw or messages', async () => {
       await aiRoutes(mockFastify);
 
       const toolsHandler = mockFastify.post.mock.calls.find((call: any[]) => call[0] === '/tools')[1];
@@ -138,10 +139,11 @@ describe('AI Routes', () => {
       const result = await toolsHandler({ body: requestData }, mockReply);
 
       expect(result.tool).toBe('search_knowledge_base');
+      expect(result.result).toEqual({ query: 'test query' });
       expect(result.execution_time_ms).toBeGreaterThanOrEqual(0);
     });
 
-    it('should accept tool with parameters', async () => {
+    it('should return parameters as-is when messages not provided', async () => {
       await aiRoutes(mockFastify);
 
       const toolsHandler = mockFastify.post.mock.calls.find((call: any[]) => call[0] === '/tools')[1];
@@ -154,7 +156,39 @@ describe('AI Routes', () => {
       const result = await toolsHandler({ body: requestData }, mockReply);
 
       expect(result.tool).toBe('get_user_info');
-      expect(result.execution_time_ms).toBeGreaterThanOrEqual(0);
+      expect(result.result).toEqual({ user_id: '123', include_history: true });
+    });
+
+    it('should accept tool_call_id', async () => {
+      await aiRoutes(mockFastify);
+
+      const toolsHandler = mockFastify.post.mock.calls.find((call: any[]) => call[0] === '/tools')[1];
+
+      const requestData = {
+        tool: 'consultar_conta',
+        tool_call_id: 'call_abc123',
+        parameters: { saldo: 1500 },
+      };
+
+      const result = await toolsHandler({ body: requestData }, mockReply);
+
+      expect(result.tool).toBe('consultar_conta');
+    });
+
+    it('should accept session_id', async () => {
+      await aiRoutes(mockFastify);
+
+      const toolsHandler = mockFastify.post.mock.calls.find((call: any[]) => call[0] === '/tools')[1];
+
+      const requestData = {
+        tool: 'consultar_conta',
+        session_id: '550e8400-e29b-41d4-a716-446655440000',
+        parameters: { contaId: 42 },
+      };
+
+      const result = await toolsHandler({ body: requestData }, mockReply);
+
+      expect(result.tool).toBe('consultar_conta');
     });
 
     it('should reject empty tool name', async () => {
@@ -180,6 +214,36 @@ describe('AI Routes', () => {
       };
 
       await expect(toolsHandler({ body: invalidData }, mockReply)).rejects.toThrow();
+    });
+
+    it('should route to OpenClaw when AGENT_RUNTIME_URL is set and messages provided', async () => {
+      const originalEnv = process.env.AGENT_RUNTIME_URL;
+      process.env.AGENT_RUNTIME_URL = 'http://openclaw:8765/v1';
+
+      await aiRoutes(mockFastify);
+
+      const toolsHandler = mockFastify.post.mock.calls.find((call: any[]) => call[0] === '/tools')[1];
+
+      const requestData = {
+        tool: 'consultar_conta',
+        tool_call_id: 'call_abc123',
+        parameters: { saldo: 1500 },
+        session_id: '550e8400-e29b-41d4-a716-446655440000',
+        messages: [
+          { role: 'user', content: 'Qual o saldo?' },
+          { role: 'assistant', content: '', tool_calls: [{ id: 'call_abc123', function: { name: 'consultar_conta', arguments: '{}' } }] },
+        ],
+      };
+
+      const result = await toolsHandler({ body: requestData }, mockReply);
+
+      expect(result.tool).toBe('consultar_conta');
+      expect(result.provider).toBe('openclaw');
+      expect(result.result).toBeDefined();
+      expect(result.result.text).toBe('AI response placeholder');
+      expect(result.execution_time_ms).toBeGreaterThanOrEqual(0);
+
+      process.env.AGENT_RUNTIME_URL = originalEnv;
     });
   });
 

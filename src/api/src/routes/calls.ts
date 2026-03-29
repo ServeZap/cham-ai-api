@@ -12,7 +12,7 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { getTenantId } from '../hooks/auth.js';
+import { getTenantId, verifyTwilioSignature } from '../hooks/auth.js';
 import { isGodAdminEmail } from '../../services/repositories/admin.repository.js';
 import {
   OutboundCallSchema,
@@ -26,6 +26,21 @@ import {
 export async function callsRoutes(fastify: FastifyInstance) {
   // Handle inbound call (webhook from Twilio/Vonage)
   fastify.post('/inbound', async (request, reply) => {
+    // SECURITY: Verify Twilio webhook signature to prevent spoofed calls
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    if (authToken) {
+      const signature = request.headers['x-twilio-signature'] as string | undefined;
+      const protocol = request.headers['x-forwarded-proto'] || 'https';
+      const host = request.headers['host'];
+      const url = `${protocol}://${host}${request.url}`;
+      const params = (request.body as Record<string, string>) || {};
+
+      if (!signature || !verifyTwilioSignature(url, params, signature, authToken)) {
+        fastify.log.warn('[Calls] Inbound webhook signature verification failed');
+        return reply.status(401).send({ error: 'Invalid webhook signature', code: 'INVALID_SIGNATURE' });
+      }
+    }
+
     const body = InboundCallSchema.parse(request.body);
     const repo = (fastify as any).repositories.calls;
 
@@ -133,11 +148,21 @@ export async function callsRoutes(fastify: FastifyInstance) {
   // Get call details
   fastify.get<{ Params: { id: string } }>('/:id', async (request, reply) => {
     const { id } = request.params;
+    const jwtPayload = (request as any).user || {};
+    const tenantId = getTenantId(jwtPayload);
     const repo = (fastify as any).repositories.calls;
     const call = await repo.findById(id);
 
     if (!call) {
       return reply.status(404).send({ error: 'Call not found', code: 'CALL_NOT_FOUND' });
+    }
+
+    // SECURITY: Enforce tenant isolation — god admins can see all tenants
+    if (!tenantId && !isGodAdminEmail(jwtPayload.email)) {
+      return reply.status(403).send({ error: 'Tenant ID not found in token', code: 'TENANT_NOT_FOUND' });
+    }
+    if (tenantId && call.tenant_id && call.tenant_id !== tenantId && !isGodAdminEmail(jwtPayload.email)) {
+      return reply.status(403).send({ error: 'Access denied', code: 'FORBIDDEN' });
     }
 
     return call;
@@ -146,11 +171,21 @@ export async function callsRoutes(fastify: FastifyInstance) {
   // Get call recording
   fastify.get<{ Params: { id: string } }>('/:id/recording', async (request, reply) => {
     const { id } = request.params;
+    const jwtPayload = (request as any).user || {};
+    const tenantId = getTenantId(jwtPayload);
     const repo = (fastify as any).repositories.calls;
     const call = await repo.findById(id);
 
     if (!call) {
       return reply.status(404).send({ error: 'Call not found', code: 'CALL_NOT_FOUND' });
+    }
+
+    // SECURITY: Enforce tenant isolation
+    if (!tenantId && !isGodAdminEmail(jwtPayload.email)) {
+      return reply.status(403).send({ error: 'Tenant ID not found in token', code: 'TENANT_NOT_FOUND' });
+    }
+    if (tenantId && call.tenant_id && call.tenant_id !== tenantId && !isGodAdminEmail(jwtPayload.email)) {
+      return reply.status(403).send({ error: 'Access denied', code: 'FORBIDDEN' });
     }
 
     // TODO: Return actual recording URL from storage
@@ -174,7 +209,14 @@ export async function callsRoutes(fastify: FastifyInstance) {
   // Get transcript for a call
   fastify.get('/transcripts/:callId', async (request, reply) => {
     const { callId } = request.params as { callId: string };
+    const jwtPayload = (request as any).user || {};
+    const tenantId = getTenantId(jwtPayload);
     const repo = (fastify as any).repositories.calls;
+
+    // SECURITY: Enforce tenant isolation
+    if (!tenantId && !isGodAdminEmail(jwtPayload.email)) {
+      return reply.status(403).send({ error: 'Tenant ID not found in token', code: 'TENANT_NOT_FOUND' });
+    }
 
     const row = await repo.findTranscript(callId);
     return { data: row };
@@ -183,7 +225,14 @@ export async function callsRoutes(fastify: FastifyInstance) {
   // Get transcribe job audio_ref for a call
   fastify.get('/transcribe-jobs/:callId/audio', async (request, reply) => {
     const { callId } = request.params as { callId: string };
+    const jwtPayload = (request as any).user || {};
+    const tenantId = getTenantId(jwtPayload);
     const repo = (fastify as any).repositories.calls;
+
+    // SECURITY: Enforce tenant isolation
+    if (!tenantId && !isGodAdminEmail(jwtPayload.email)) {
+      return reply.status(403).send({ error: 'Tenant ID not found in token', code: 'TENANT_NOT_FOUND' });
+    }
 
     const row = await repo.findTranscribeJobAudio(callId);
     return { data: row };
