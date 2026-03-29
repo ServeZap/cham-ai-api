@@ -30,6 +30,7 @@ import { storageRoutes } from './routes/storage.js';
 import { failoverRoutes } from './routes/failover.js';
 import { demoRoutes } from './routes/demo.js';
 import { usersRoutes } from './routes/users.js';
+import { usageRoutes } from './routes/usage.js';
 
 import { errorHandler } from './handlers/error.js';
 import { authHook } from './hooks/auth.js';
@@ -137,6 +138,7 @@ export async function createServer() {
   await server.register(eventsRoutes, { prefix: '/api/v1/events' });
   await server.register(failoverRoutes, { prefix: '/api/v1/failover' });
   await server.register(usersRoutes, { prefix: '/api/v1/users' });
+  await server.register(usageRoutes, { prefix: '/api/v1/usage' });
   await server.register(demoRoutes, { prefix: '/api/v1/demo' });
 
   // Error handler

@@ -10,6 +10,7 @@
 
 import { FastifyInstance } from 'fastify';
 import { ConverseSchema } from '../../../../contracts/src/index.js';
+import { estimateCost, buildUsageInsertSQL, type UsageRecord } from '../services/cost-tracker.js';
 
 /** Whether OpenClaw is configured as the AI backend */
 function isOpenClawConfigured(): boolean {
@@ -43,11 +44,19 @@ export async function voiceRoutes(fastify: FastifyInstance) {
     let responseText = '';
     let responseAudio: string | null = null;
 
+    // Cost tracking accumulators
+    let sttDurationMs = 0;
+    let llmPromptTokens = 0;
+    let llmCompletionTokens = 0;
+    let llmTotalTokens = 0;
+    let ttsCharacters = 0;
+
     const hasAI = process.env.OPENAI_API_KEY || isOpenClawConfigured();
 
     // Step 1: STT (if audio provided)
     if (data.audio && process.env.OPENAI_API_KEY) {
       try {
+        const sttStart = Date.now();
         const openai = await buildOpenAIClient();
 
         const audioBuffer = Buffer.from(data.audio, 'base64');
@@ -58,6 +67,7 @@ export async function voiceRoutes(fastify: FastifyInstance) {
         });
 
         transcription = transcriptionResult.text;
+        sttDurationMs = Date.now() - sttStart;
       } catch (err: any) {
         fastify.log.error('[Voice] STT error:', err);
         transcription = '[Erro na transcrição]';
@@ -91,6 +101,9 @@ export async function voiceRoutes(fastify: FastifyInstance) {
         });
 
         responseText = completion.choices[0]?.message?.content || 'Desculpe, não consegui processar.';
+        llmPromptTokens = completion.usage?.prompt_tokens || 0;
+        llmCompletionTokens = completion.usage?.completion_tokens || 0;
+        llmTotalTokens = completion.usage?.total_tokens || 0;
       } catch (err: any) {
         fastify.log.error('[Voice] LLM error:', err);
         responseText = 'Desculpe, estou com dificuldades técnicas no momento.';
@@ -118,10 +131,35 @@ export async function voiceRoutes(fastify: FastifyInstance) {
 
         const audioBuffer = Buffer.from(await ttsResponse.arrayBuffer());
         responseAudio = audioBuffer.toString('base64');
+        ttsCharacters = responseText.length;
       } catch (err: any) {
         fastify.log.error('[Voice] TTS error:', err);
         // TTS is optional — don't fail the whole request
       }
+    }
+
+    // Track cost governance (fire-and-forget)
+    const jwtPayload = (request as any).user || {};
+    const db = (fastify as any).db;
+    if (db && jwtPayload.app_metadata?.tenant_id) {
+      const usage: UsageRecord = {
+        tenant_id: jwtPayload.app_metadata.tenant_id,
+        session_id: data.session_id || undefined,
+        stt_provider: data.audio ? 'whisper-1' : undefined,
+        stt_duration_ms: sttDurationMs || undefined,
+        llm_provider: isOpenClawConfigured() ? 'openclaw' : (process.env.OPENAI_API_KEY ? 'openai' : undefined),
+        llm_model: resolveModel(),
+        llm_prompt_tokens: llmPromptTokens || undefined,
+        llm_completion_tokens: llmCompletionTokens || undefined,
+        llm_total_tokens: llmTotalTokens || undefined,
+        tts_provider: responseAudio ? (isOpenClawConfigured() ? 'openclaw' : 'openai') : undefined,
+        tts_characters: ttsCharacters || undefined,
+      };
+      const costs = estimateCost(usage);
+      const { sql, params } = buildUsageInsertSQL(usage, costs);
+      db.query(sql, params).catch((err: any) => {
+        fastify.log.error({ err }, '[Cost] Failed to track voice usage');
+      });
     }
 
     return {

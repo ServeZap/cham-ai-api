@@ -49,6 +49,22 @@ export async function clawdTalkRoutes(fastify: FastifyInstance) {
         timestamp: new Date().toISOString(),
       }));
 
+      /**
+       * SECURITY: Reject all non-start events until authenticated.
+       * The `start` event carries the JWT token. Every other event type
+       * requires prior successful authentication.
+       */
+      function requireAuth(event: any): boolean {
+        if (authenticated) return true;
+        if (event.event === 'start' && event.token) return true; // handled below
+        connection.socket.send(JSON.stringify({
+          type: 'error',
+          call_id: event.call_id || 'unknown',
+          error: 'Authentication required. Send a start event with a valid token.',
+        }));
+        return false;
+      }
+
       connection.socket.on('message', async (data: Buffer) => {
         try {
           const rawMessage = data.toString();
@@ -56,7 +72,7 @@ export async function clawdTalkRoutes(fastify: FastifyInstance) {
 
           const event = ClawdTalkEventSchema.parse(JSON.parse(rawMessage));
 
-          // Auth: first message must contain token (unless skipPaths)
+          // Auth: first message must contain token
           if (!authenticated && event.event === 'start' && event.token) {
             try {
               await (fastify as any).jwt.verify(event.token);
@@ -71,12 +87,19 @@ export async function clawdTalkRoutes(fastify: FastifyInstance) {
             }
           }
 
+          // SECURITY: Reject any event if not yet authenticated
+          if (!requireAuth(event)) {
+            return;
+          }
+
           // Handle different event types
           switch (event.event) {
             case 'start': {
               fastify.log.info(`[ClawdTalk] Call started: ${event.call_id}`);
 
-              // Store in Redis if available
+              const tenantId = (event as any).tenant_id || (fastify as any).tenantId || 'system';
+
+              // Store call metadata in Redis for duration tracking
               const redis = (fastify as any).redis;
               if (redis) {
                 await redis.set(
@@ -84,21 +107,50 @@ export async function clawdTalkRoutes(fastify: FastifyInstance) {
                   JSON.stringify({
                     startTime: new Date().toISOString(),
                     lastActivity: new Date().toISOString(),
+                    tenantId,
                     messages: [],
                   }),
                   'EX',
-                  3600
+                  7200
                 );
+              }
+
+              // Create call record in database
+              const callsRepo = (fastify as any).repositories?.calls;
+              let callId = event.call_id;
+              if (callsRepo) {
+                try {
+                  const call = await callsRepo.create({
+                    tenant_id: tenantId,
+                    caller_number: (event as any).from || null,
+                    receiver_id: (event as any).to || null,
+                    status: 'in_progress',
+                    direction: 'inbound',
+                    start_time: new Date().toISOString(),
+                    metadata: { provider: 'clawdtalk', channel: 'websocket' },
+                  });
+                  callId = call.id || callId;
+
+                  // Create session for this call
+                  const sessionsRepo = (fastify as any).repositories?.sessions;
+                  if (sessionsRepo) {
+                    await sessionsRepo.create({
+                      tenant_id: tenantId,
+                      assistant_id: null,
+                    });
+                  }
+                } catch (err: any) {
+                  fastify.log.error({ err, callId }, '[ClawdTalk] Failed to create call record');
+                }
               }
 
               // Publish call event
               const eventBus: any = (fastify as any).eventBus;
               if (eventBus) {
-                const tenantId = (event as any).tenant_id || (fastify as any).tenantId || 'system';
                 await eventBus.publish({
                   type: 'call.status_changed',
                   tenantId,
-                  callId: event.call_id,
+                  callId,
                   payload: { status: 'in_progress', event: 'start' },
                   timestamp: new Date().toISOString(),
                 });
@@ -106,7 +158,7 @@ export async function clawdTalkRoutes(fastify: FastifyInstance) {
 
               const response: ClawdTalkResponse = {
                 type: 'response',
-                call_id: event.call_id,
+                call_id: callId,
                 text: 'Hello! This is Cham.ai. How can I help you today?',
                 sequence: event.sequence,
               };
@@ -214,21 +266,64 @@ export async function clawdTalkRoutes(fastify: FastifyInstance) {
             case 'hangup': {
               fastify.log.info(`[ClawdTalk] Call ended: ${event.call_id}`);
 
-              // Clean up Redis
+              // Calculate call duration from Redis
               const redis = (fastify as any).redis;
+              let durationSeconds = 0;
+              let tenantId = 'system';
+
               if (redis) {
-                await redis.del(`clawdtalk:call:${event.call_id}`);
+                try {
+                  const callData = await redis.get(`clawdtalk:call:${event.call_id}`);
+                  if (callData) {
+                    const parsed = JSON.parse(callData);
+                    const startTime = new Date(parsed.startTime).getTime();
+                    durationSeconds = Math.round((Date.now() - startTime) / 1000);
+                    tenantId = parsed.tenantId || 'system';
+                  }
+                  await redis.del(`clawdtalk:call:${event.call_id}`);
+                } catch {
+                  // Redis cleanup failed
+                }
+              }
+
+              // Update call record in database
+              const callsRepo = (fastify as any).repositories?.calls;
+              if (callsRepo && durationSeconds > 0) {
+                try {
+                  await callsRepo.update(event.call_id, {
+                    status: 'completed',
+                    duration_seconds: durationSeconds,
+                  });
+
+                  // Track telephony usage for cost governance
+                  const db = (fastify as any).db;
+                  if (db) {
+                    const { estimateCost, buildUsageInsertSQL } = await import('../services/cost-tracker.js');
+                    const usage = {
+                      tenant_id: tenantId,
+                      call_id: event.call_id,
+                      telephony_provider: 'clawdtalk',
+                      telephony_duration_seconds: durationSeconds,
+                    };
+                    const costs = estimateCost(usage);
+                    const { sql, params } = buildUsageInsertSQL(usage, costs);
+                    db.query(sql, params).catch((err: any) => {
+                      fastify.log.error({ err }, '[ClawdTalk] Failed to track usage');
+                    });
+                  }
+                } catch (err: any) {
+                  fastify.log.error({ err }, '[ClawdTalk] Failed to update call record');
+                }
               }
 
               // Publish call ended event
               const eventBus: any = (fastify as any).eventBus;
               if (eventBus) {
-                const tenantId = (event as any).tenant_id || 'system';
                 await eventBus.publish({
                   type: 'call.ended',
                   tenantId,
                   callId: event.call_id,
-                  payload: { status: 'ended', event: event.event },
+                  payload: { status: 'ended', event: event.event, duration_seconds: durationSeconds },
                   timestamp: new Date().toISOString(),
                 });
               }

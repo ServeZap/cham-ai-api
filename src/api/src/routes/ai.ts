@@ -14,6 +14,20 @@ import {
   CompleteSchema,
   ToolCallSchema,
 } from '../../../../contracts/src/index.js';
+import { estimateCost, buildUsageInsertSQL, type UsageRecord } from '../services/cost-tracker.js';
+
+/** Track usage to DB if available (fire-and-forget) */
+function trackUsage(fastify: FastifyInstance, usage: UsageRecord) {
+  const db = (fastify as any).db;
+  if (!db) return;
+
+  const costs = estimateCost(usage);
+  const { sql, params } = buildUsageInsertSQL(usage, costs);
+
+  db.query(sql, params).catch((err: any) => {
+    fastify.log.error({ err, callId: usage.call_id }, '[Cost] Failed to track usage');
+  });
+}
 
 /** Whether OpenClaw is configured as the AI backend */
 function isOpenClawConfigured(): boolean {
@@ -82,6 +96,20 @@ export async function aiRoutes(fastify: FastifyInstance) {
       const choice = completion.choices[0];
       const text = choice?.message?.content || '';
       const usage = completion.usage;
+
+      // Track cost governance (fire-and-forget)
+      const jwtPayload = (request as any).user || {};
+      trackUsage(fastify, {
+        tenant_id: jwtPayload.app_metadata?.tenant_id || jwtPayload.sub || 'unknown',
+        session_id: data.session_id || undefined,
+        llm_provider: usingOpenClaw ? 'openclaw' : 'openai',
+        llm_model: model,
+        llm_prompt_tokens: usage?.prompt_tokens,
+        llm_completion_tokens: usage?.completion_tokens,
+        llm_total_tokens: usage?.total_tokens,
+        tool_calls_count: choice?.message?.tool_calls?.length,
+        tools_used: choice?.message?.tool_calls?.map((tc: any) => tc.function?.name),
+      });
 
       return {
         text,

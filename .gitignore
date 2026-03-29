@@ -48,6 +48,12 @@ htmlcov/
 # Node
 node_modules/
 
+# Compiled JS in TypeScript source dirs (use dist/ for built output)
+contracts/src/**/*.js
+src/api/src/**/*.js
+src/api/services/**/*.js
+src/api/tests/**/*.js
+
 # Logs
 *.log
 

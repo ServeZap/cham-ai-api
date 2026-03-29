@@ -32,6 +32,48 @@ const UpdateMissionSchema = z.object({
   target_url: z.string().nullable().optional(),
 });
 
+/**
+ * Resolve the configured UI executor provider URL.
+ * Falls back to a configurable UI_EXECUTOR_URL env var.
+ */
+function getUIExecutorUrl(): string | null {
+  return process.env.UI_EXECUTOR_URL || null;
+}
+
+/**
+ * Delegate screenshot capture to the configured UI executor provider.
+ * Calls the provider's HTTP API to capture a screenshot of the current mission state.
+ */
+async function captureScreenshotFromExecutor(
+  executorUrl: string,
+  missionId: string,
+  stepIndex: number | undefined,
+  log: any,
+): Promise<{ imageBase64: string | null; error?: string }> {
+  try {
+    const response = await fetch(`${executorUrl}/api/v1/screenshot`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mission_id: missionId,
+        step_index: stepIndex,
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      log.error(`[Missions] UI executor screenshot failed: ${response.status}`, body);
+      return { imageBase64: null, error: `Executor returned ${response.status}` };
+    }
+
+    const data = await response.json();
+    return { imageBase64: data.imageBase64 || data.screenshot || null };
+  } catch (err: any) {
+    log.error(`[Missions] UI executor screenshot error:`, err);
+    return { imageBase64: null, error: err.message };
+  }
+}
+
 export async function missionsRoutes(fastify: FastifyInstance) {
   // List missions
   fastify.get('/', async (request, reply) => {
@@ -169,11 +211,31 @@ export async function missionsRoutes(fastify: FastifyInstance) {
       return reply.status(404).send({ error: 'Mission not found', code: 'MISSION_NOT_FOUND' });
     }
 
-    // TODO: Delegate to uiExecutor for actual screenshot capture
+    // Delegate to UI executor provider for screenshot capture
+    const executorUrl = getUIExecutorUrl();
+    if (executorUrl) {
+      const body = request.body as any;
+      const result = await captureScreenshotFromExecutor(
+        executorUrl,
+        id,
+        body?.step_index,
+        fastify.log,
+      );
+
+      return {
+        mission_id: id,
+        imageBase64: result.imageBase64,
+        provider: 'ui-executor',
+        error: result.error || null,
+      };
+    }
+
+    // No UI executor configured
     return {
       mission_id: id,
       imageBase64: null,
-      message: 'Screenshot capture not yet implemented via backend API',
+      provider: 'none',
+      message: 'No UI executor configured — set UI_EXECUTOR_URL to enable screenshot capture',
     };
   });
 }

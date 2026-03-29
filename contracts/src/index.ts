@@ -88,6 +88,13 @@ export {
 
 export { DemoRequestSchema } from './schemas/demo.schema.js';
 
+export {
+  UsageQuerySchema,
+  TenantLimitsSchema,
+  CostCheckSchema,
+  CallUsageSchema,
+} from './schemas/usage.schema.js';
+
 export { GenerateApiKeySchema } from './schemas/admin.schema.js';
 
 export {

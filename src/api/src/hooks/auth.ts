@@ -5,10 +5,14 @@
  * Extracts user info from Supabase JWT payload (sub, email, app_metadata.tenant_id).
  */
 
+import { createHmac } from 'crypto';
 import { FastifyRequest, FastifyReply } from 'fastify';
 
 /**
  * Auth paths that skip JWT verification (public endpoints / webhooks)
+ *
+ * SECURITY: /api/v1/voice/converse was REMOVED — it consumes OpenAI credits
+ * and must require authentication (cost governance principle).
  */
 export const authConfig = {
   skipPaths: [
@@ -16,8 +20,7 @@ export const authConfig = {
     '/api/ready',
     '/api/metrics',
     '/docs',
-    '/api/v1/calls/inbound', // Twilio webhook
-    '/api/v1/voice/converse', // Public conversational endpoint
+    '/api/v1/calls/inbound', // Twilio webhook (signature verified in route)
     '/api/v1/demo/requests', // Landing page demo request (public)
   ],
 };
@@ -70,11 +73,42 @@ export async function authHook(request: FastifyRequest, reply: FastifyReply) {
 }
 
 /**
- * Verify Twilio webhook signature
+ * Verify Twilio webhook signature using HMAC-SHA1.
+ *
+ * Twilio signs the full URL concatenated with sorted POST parameters
+ * using the Auth Token as the HMAC key.
+ *
+ * @see https://www.twilio.com/docs/usage/security#validating-requests
  */
-export function requireTwilioSignature(request: any): boolean {
-  const signature = request.headers['x-twilio-signature'];
-  const url = request.url;
-  // TODO: Implement actual Twilio signature verification
-  return !!signature;
+export function verifyTwilioSignature(
+  url: string,
+  params: Record<string, string>,
+  signature: string,
+  authToken: string
+): boolean {
+  if (!authToken || !signature) {
+    return false;
+  }
+
+  // Exclude the signature itself and empty values from the sorted params
+  const data = Object.entries(params)
+    .filter(([key]) => key !== 'X-Twilio-Signature')
+    .filter(([, value]) => value !== '')
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}${value}`)
+    .join('');
+
+  const payload = `${url}${data}`;
+  const expected = createHmac('sha1', authToken).update(payload).digest('base64');
+
+  // Constant-time comparison to prevent timing attacks
+  if (expected.length !== signature.length) {
+    return false;
+  }
+
+  let result = 0;
+  for (let i = 0; i < expected.length; i++) {
+    result |= expected.charCodeAt(i) ^ signature.charCodeAt(i);
+  }
+  return result === 0;
 }

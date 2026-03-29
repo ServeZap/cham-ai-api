@@ -1,20 +1,132 @@
-# Cham.ai — Docker Compose (development)
+# Cham.ai — Complete Docker Compose
 #
 # Usage:
-#   docker compose up -d openclaw     # Start only OpenClaw
-#   docker compose up -d              # Start all services
-#   docker compose logs openclaw -f   # Follow OpenClaw logs
+#   docker compose up -d                    # Start everything (infra only)
+#   docker compose --profile app up -d      # Start infra + backend + frontend
+#   docker compose --profile full up -d     # Start everything including OpenClaw + Qdrant
+#   docker compose logs -f                  # Follow all logs
+#   docker compose down -v                  # Stop + remove volumes (fresh start)
 #
-# When OpenClaw is running, uncomment AGENT_RUNTIME_URL in src/api/.env:
-#   AGENT_RUNTIME_URL=http://openclaw:8765/v1
+# Profiles:
+#   (default)  — PostgreSQL + Redis (infra)
+#   app        — adds Backend API + Frontend SPA
+#   full       — adds OpenClaw + Qdrant (AI + RAG)
+#   clawdtalk  — adds ClawdTalk telephony gateway
 
 services:
-  # ── OpenClaw — Agent Runtime (LLM + Tools + Memory) ──────────────
-  # OpenAI-compatible API at /v1/chat/completions (port 8765)
-  # Routes to GLM-5.1 → Claude → Gemini with tool calling and RAG.
-  #
-  # Dev:    http://localhost:8765/v1
-  # Docker: http://openclaw:8765/v1
+  # ── PostgreSQL ──────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: chamai-postgres
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-chamai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chamai_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-cham_ai}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-chamai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - chamai-network
+
+  # ── Redis ──────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: chamai-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - chamai-network
+
+  # ── Backend API (Fastify) ──────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: src/api/Dockerfile
+    container_name: chamai-backend
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 8000
+      HOST: 0.0.0.0
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost}
+      # Database
+      DATABASE_URL: postgresql://${POSTGRES_USER:-chamai}:${POSTGRES_PASSWORD:-chamai_secret}@postgres:5432/${POSTGRES_DB:-cham_ai}
+      # Redis
+      REDIS_URL: redis://redis:6379
+      # Auth
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-}
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      # OpenAI
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-gpt-4o}
+      # OpenClaw (optional — when set, backend proxies to OpenClaw)
+      AGENT_RUNTIME_URL: ${AGENT_RUNTIME_URL:-}
+      OPENCLAW_MODEL: ${OPENCLAW_MODEL:-nadirclaw}
+      OPENCLAW_TTS_MODEL: ${OPENCLAW_TTS_MODEL:-tts-1}
+      TTS_VOICE: ${TTS_VOICE:-alloy}
+      # ClawdTalk (optional)
+      CLAWDTALK_API_URL: ${CLAWDTALK_API_URL:-}
+      CLAWDTALK_API_KEY: ${CLAWDTALK_API_KEY:-}
+      CLAWDTALK_WEBHOOK_URL: ${CLAWDTALK_WEBHOOK_URL:-}
+      # Supabase Storage
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      # UI Executor (optional)
+      UI_EXECUTOR_URL: ${UI_EXECUTOR_URL:-}
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - chamai-network
+    profiles:
+      - app
+
+  # ── Frontend SPA (Vite build → Nginx) ──────────────────────────
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: chamai-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - chamai-network
+    profiles:
+      - app
+
+  # ── OpenClaw — Agent Runtime (LLM + Tools + Memory) ────────────
   openclaw:
     image: openclaw/openclaw:latest
     container_name: chamai-openclaw
@@ -26,24 +138,23 @@ services:
     environment:
       - OPENCLAW_HOST=0.0.0.0
       - OPENCLAW_PORT=8765
-      # LLM API keys — set via .env or host environment
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-      # Vector DB (Qdrant) for RAG
       - QDRANT_URL=http://qdrant:6333
-      # Redis for job queue
       - REDIS_URL=redis://redis:6379
-    networks:
-      - chamai-network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8765/v1/models"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 15s
+    networks:
+      - chamai-network
+    profiles:
+      - full
 
-  # ── Qdrant — Vector Database for RAG ─────────────────────────────
+  # ── Qdrant — Vector Database for RAG ───────────────────────────
   qdrant:
     image: qdrant/qdrant:latest
     container_name: chamai-qdrant
@@ -58,24 +169,37 @@ services:
     profiles:
       - full
 
-  # ── Redis — Job Queue / Cache ────────────────────────────────────
-  redis:
-    image: redis:7-alpine
-    container_name: chamai-redis
+  # ── ClawdTalk — Telephony Gateway ──────────────────────────────
+  # Real telephony provider for SIP/PSTN calls.
+  # Configure CLAWDTALK_API_URL in backend to point here.
+  clawdtalk:
+    image: clawdtalk/clawdtalk:latest
+    container_name: chamai-clawdtalk
     restart: unless-stopped
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "${CLAWDTALK_PORT:-9000}:9000"
     volumes:
-      - redis-data:/data
+      - clawdtalk-data:/app/data
+    environment:
+      - CLAWDTALK_HOST=0.0.0.0
+      - CLAWDTALK_PORT=9000
+      - CLAWDTALK_API_KEY=${CLAWDTALK_API_KEY:-}
+      - CLAWDTALK_SIP_SERVER=${CLAWDTALK_SIP_SERVER:-}
+      - CLAWDTALK_SIP_USERNAME=${CLAWDTALK_SIP_USERNAME:-}
+      - CLAWDTALK_SIP_PASSWORD=${CLAWDTALK_SIP_PASSWORD:-}
+      - BACKEND_URL=http://backend:8000
+      - BACKEND_API_KEY=${CLAWDTALK_API_KEY:-}
     networks:
       - chamai-network
     profiles:
-      - full
+      - clawdtalk
 
 volumes:
+  postgres-data:
+  redis-data:
   openclaw-data:
   qdrant-data:
-  redis-data:
+  clawdtalk-data:
 
 networks:
   chamai-network:

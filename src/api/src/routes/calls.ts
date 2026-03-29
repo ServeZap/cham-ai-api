@@ -23,6 +23,100 @@ import {
   CDRQuerySchema,
 } from '../../../../contracts/src/index.js';
 
+// ── Helpers ──────────────────────────────────────────────────────
+
+const BUCKET_NAME = 'call-assets';
+
+/**
+ * Dispatch outbound call to the configured telephony provider.
+ * Supports ClawdTalk (primary) or Twilio (fallback) via env vars.
+ * When no provider is configured, the call stays as "initiated" (stub mode).
+ */
+async function dispatchToTelephonyProvider(
+  callId: string,
+  phoneNumber: string,
+  tenantId: string | undefined,
+  assistantId: string | undefined,
+  log: any,
+): Promise<{ provider: string; providerCallId?: string; error?: string }> {
+  const clawdTalkUrl = process.env.CLAWDTALK_API_URL;
+  const clawdTalkKey = process.env.CLAWDTALK_API_KEY;
+
+  // ClawdTalk: primary telephony provider
+  if (clawdTalkUrl && clawdTalkKey && clawdTalkKey !== 'your-clawdtalk-api-key-here') {
+    try {
+      const response = await fetch(`${clawdTalkUrl}/api/v1/calls/originate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${clawdTalkKey}`,
+        },
+        body: JSON.stringify({
+          call_id: callId,
+          to: phoneNumber,
+          tenant_id: tenantId,
+          assistant_id: assistantId,
+          webhook_url: process.env.CLAWDTALK_WEBHOOK_URL || undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        log.error(`[Calls] ClawdTalk dispatch failed: ${response.status}`, body);
+        return { provider: 'clawdtalk', error: `ClawdTalk returned ${response.status}` };
+      }
+
+      const data = await response.json();
+      return { provider: 'clawdtalk', providerCallId: data.provider_call_id || data.callSid };
+    } catch (err: any) {
+      log.error(`[Calls] ClawdTalk dispatch error:`, err);
+      return { provider: 'clawdtalk', error: err.message };
+    }
+  }
+
+  // No telephony provider configured — stub mode
+  log.info(`[Calls] No telephony provider configured — call ${callId} remains "initiated"`);
+  return { provider: 'none' };
+}
+
+/**
+ * Generate a Supabase Storage signed URL for a recording file.
+ * Reuses the same RPC approach as storage.ts.
+ */
+async function createRecordingSignedUrl(
+  path: string,
+  expiresIn: number = 3600,
+): Promise<string> {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!supabaseUrl || !serviceKey) {
+    throw new Error('Storage not configured');
+  }
+
+  const response = await fetch(`${supabaseUrl}/rest/v1/rpc/create_signed_url`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: serviceKey,
+      Authorization: `Bearer ${serviceKey}`,
+    },
+    body: JSON.stringify({
+      bucket_name: BUCKET_NAME,
+      path,
+      expires_in: expiresIn,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.message || body.error || 'Failed to create signed URL');
+  }
+
+  const data = await response.json();
+  return data.signed_url || data.signedUrl || data;
+}
+
 export async function callsRoutes(fastify: FastifyInstance) {
   // Handle inbound call (webhook from Twilio/Vonage)
   fastify.post('/inbound', async (request, reply) => {
@@ -104,10 +198,35 @@ export async function callsRoutes(fastify: FastifyInstance) {
       });
     }
 
-    // TODO: Dispatch to telephony provider (ClawdTalk/Twilio)
-    // For now, mark as initiated
+    // Dispatch to telephony provider (ClawdTalk primary, Twilio fallback)
+    const dispatch = await dispatchToTelephonyProvider(
+      call.id,
+      data.phone_number,
+      call.tenant_id,
+      data.assistant_id,
+      fastify.log,
+    );
 
-    return reply.status(201).send(call);
+    // Update call status based on dispatch result
+    if (dispatch.providerCallId) {
+      await repo.update(call.id, {
+        status: 'ringing',
+        provider: dispatch.provider,
+        provider_call_id: dispatch.providerCallId,
+      });
+    } else if (dispatch.error) {
+      await repo.update(call.id, {
+        status: 'failed',
+        provider: dispatch.provider,
+      });
+    }
+
+    return reply.status(201).send({
+      ...call,
+      dispatch_provider: dispatch.provider,
+      provider_call_id: dispatch.providerCallId || null,
+      dispatch_error: dispatch.error || null,
+    });
   });
 
   // List calls (new endpoint for use-call-history)
@@ -188,11 +307,31 @@ export async function callsRoutes(fastify: FastifyInstance) {
       return reply.status(403).send({ error: 'Access denied', code: 'FORBIDDEN' });
     }
 
-    // TODO: Return actual recording URL from storage
-    return reply.status(404).send({
-      error: 'Recording not found',
-      code: 'RECORDING_NOT_FOUND',
-    });
+    // Return recording URL from Supabase Storage (signed URL)
+    const recordingPath = call.recording_url || call.recording_path;
+    if (!recordingPath) {
+      return reply.status(404).send({
+        error: 'Recording not found',
+        code: 'RECORDING_NOT_FOUND',
+      });
+    }
+
+    try {
+      const expiresIn = 3600; // 1 hour
+      const signedUrl = await createRecordingSignedUrl(recordingPath, expiresIn);
+      return {
+        call_id: id,
+        recording_url: signedUrl,
+        expires_in: expiresIn,
+        content_type: 'audio/mpeg',
+      };
+    } catch (err: any) {
+      fastify.log.error(`[Calls] Failed to generate recording signed URL for ${id}:`, err);
+      return reply.status(500).send({
+        error: 'Failed to generate recording URL',
+        code: 'STORAGE_ERROR',
+      });
+    }
   });
 
   // Save transcript for a call

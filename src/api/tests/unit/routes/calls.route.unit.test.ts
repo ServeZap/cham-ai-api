@@ -32,6 +32,7 @@ describe('Calls Routes', () => {
       put: vi.fn(),
       patch: vi.fn(),
       delete: vi.fn(),
+      log: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
       // Add repositories mock
       repositories: {
         calls: {
@@ -44,7 +45,10 @@ describe('Calls Routes', () => {
             created_at: new Date().toISOString(),
             start_time: new Date().toISOString(),
           }),
-          update: vi.fn().mockResolvedValue(null),
+          update: vi.fn().mockResolvedValue({
+            id: '123e4567-e89b-12d3-a456-426614174000',
+            status: 'initiated',
+          }),
           insertTranscript: vi.fn().mockResolvedValue({ id: '1', call_id: 'call-1', created_at: new Date().toISOString() }),
           findTranscript: vi.fn().mockResolvedValue(null),
           findTranscribeJobAudio: vi.fn().mockResolvedValue(null),
@@ -69,6 +73,15 @@ describe('Calls Routes', () => {
   });
 
   describe('POST /inbound', () => {
+    // Clear TWILIO_AUTH_TOKEN so signature verification is skipped (set by setup.ts)
+    const originalTwilioToken = process.env.TWILIO_AUTH_TOKEN;
+    beforeEach(() => {
+      delete process.env.TWILIO_AUTH_TOKEN;
+    });
+    afterAll(() => {
+      if (originalTwilioToken) process.env.TWILIO_AUTH_TOKEN = originalTwilioToken;
+    });
+
     it('should handle inbound call', async () => {
       await callsRoutes(mockFastify);
 
@@ -80,7 +93,7 @@ describe('Calls Routes', () => {
         To: '+0987654321',
       };
 
-      const result = await inboundHandler({ body: requestBody }, mockReply);
+      const result = await inboundHandler({ body: requestBody, headers: {} }, mockReply);
 
       expect(result).toEqual({
         call_id: '123e4567-e89b-12d3-a456-426614174000',
@@ -100,7 +113,7 @@ describe('Calls Routes', () => {
         To: '+14444444444',
       };
 
-      const result = await inboundHandler({ body: requestBody }, mockReply);
+      const result = await inboundHandler({ body: requestBody, headers: {} }, mockReply);
 
       // call_id comes from repo.create() mock, not from CallSid
       expect(result.call_id).toBeDefined();
@@ -117,7 +130,7 @@ describe('Calls Routes', () => {
         To: '+1111111111',
       };
 
-      const result = await inboundHandler({ body: requestBody }, mockReply);
+      const result = await inboundHandler({ body: requestBody, headers: {} }, mockReply);
 
       expect(result.session_id).toBeDefined();
       expect(result.session_id).toMatch(/^[0-9a-f-]{36}$/);
@@ -134,7 +147,7 @@ describe('Calls Routes', () => {
         To: '+1333333333',
       };
 
-      const result = await inboundHandler({ body: requestBody }, mockReply);
+      const result = await inboundHandler({ body: requestBody, headers: {} }, mockReply);
 
       expect(result.status).toBe('answered');
     });
@@ -158,8 +171,32 @@ describe('Calls Routes', () => {
         expect.objectContaining({
           id: '123e4567-e89b-12d3-a456-426614174000',
           status: 'initiated',
+          dispatch_provider: expect.any(String),
         })
       );
+    });
+
+    it('should return dispatch_provider as "none" when no provider configured', async () => {
+      // Ensure no real provider key is set
+      const originalKey = process.env.CLAWDTALK_API_KEY;
+      process.env.CLAWDTALK_API_KEY = 'your-clawdtalk-api-key-here';
+
+      await callsRoutes(mockFastify);
+
+      const outboundHandler = mockFastify.post.mock.calls.find((call: any[]) => call[0] === '/outbound')[1];
+
+      const requestData = {
+        phone_number: '+1234567890',
+        assistant_id: '550e8400-e29b-41d4-a716-446655440000',
+      };
+
+      await outboundHandler({ body: requestData }, mockReply);
+
+      const sentCall = mockReply.send.mock.calls[0][0];
+      expect(sentCall.dispatch_provider).toBe('none');
+      expect(sentCall.dispatch_error).toBeNull();
+
+      process.env.CLAWDTALK_API_KEY = originalKey;
     });
 
     it('should generate call id for outbound call', async () => {
@@ -306,24 +343,61 @@ describe('Calls Routes', () => {
       });
     });
 
-    it('should return 404 for recording when call exists but no recording', async () => {
+    it('should return 404 for recording when call exists but no recording_path', async () => {
       await callsRoutes(mockFastify);
 
       const recordingHandler = mockFastify.get.mock.calls.find((call: any[]) => call[0] === '/:id/recording')[1];
 
-      // Override findById to return a call (recording not yet implemented)
+      // Call exists but has no recording_url or recording_path
       (mockFastify as any).repositories.calls.findById = vi.fn().mockResolvedValue({
         id: 'call-123',
         status: 'completed',
+        tenant_id: null,
       });
 
-      await recordingHandler({ params: { id: 'call-123' } }, mockReply);
+      await recordingHandler({
+        params: { id: 'call-123' },
+        user: { sub: 'user-1', email: GOD_ADMIN_EMAIL },
+      }, mockReply);
 
       expect(mockReply.status).toHaveBeenCalledWith(404);
       expect(mockReply.send).toHaveBeenCalledWith({
         error: 'Recording not found',
         code: 'RECORDING_NOT_FOUND',
       });
+    });
+
+    it('should return 500 when recording exists but storage not configured', async () => {
+      const originalUrl = process.env.SUPABASE_URL;
+      const originalKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      delete process.env.SUPABASE_URL;
+      delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+      await callsRoutes(mockFastify);
+
+      const recordingHandler = mockFastify.get.mock.calls.find((call: any[]) => call[0] === '/:id/recording')[1];
+
+      (mockFastify as any).repositories.calls.findById = vi.fn().mockResolvedValue({
+        id: 'call-456',
+        status: 'completed',
+        recording_url: 'tenant-1/recordings/call-456.mp3',
+        tenant_id: null,
+      });
+
+      await recordingHandler({
+        params: { id: 'call-456' },
+        user: { sub: 'user-1', email: GOD_ADMIN_EMAIL },
+      }, mockReply);
+
+      expect(mockReply.status).toHaveBeenCalledWith(500);
+      expect(mockReply.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          code: 'STORAGE_ERROR',
+        })
+      );
+
+      if (originalUrl) process.env.SUPABASE_URL = originalUrl;
+      if (originalKey) process.env.SUPABASE_SERVICE_ROLE_KEY = originalKey;
     });
 
     it('should extract id from params for recording', async () => {
