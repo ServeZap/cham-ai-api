@@ -1,0 +1,82 @@
+# Cham.ai — Docker Compose (development)
+#
+# Usage:
+#   docker compose up -d openclaw     # Start only OpenClaw
+#   docker compose up -d              # Start all services
+#   docker compose logs openclaw -f   # Follow OpenClaw logs
+#
+# When OpenClaw is running, uncomment AGENT_RUNTIME_URL in src/api/.env:
+#   AGENT_RUNTIME_URL=http://openclaw:8765/v1
+
+services:
+  # ── OpenClaw — Agent Runtime (LLM + Tools + Memory) ──────────────
+  # OpenAI-compatible API at /v1/chat/completions (port 8765)
+  # Routes to GLM-5.1 → Claude → Gemini with tool calling and RAG.
+  #
+  # Dev:    http://localhost:8765/v1
+  # Docker: http://openclaw:8765/v1
+  openclaw:
+    image: openclaw/openclaw:latest
+    container_name: chamai-openclaw
+    restart: unless-stopped
+    ports:
+      - "${OPENCLAW_PORT:-8765}:8765"
+    volumes:
+      - openclaw-data:/app/data
+    environment:
+      - OPENCLAW_HOST=0.0.0.0
+      - OPENCLAW_PORT=8765
+      # LLM API keys — set via .env or host environment
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      # Vector DB (Qdrant) for RAG
+      - QDRANT_URL=http://qdrant:6333
+      # Redis for job queue
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - chamai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/v1/models"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── Qdrant — Vector Database for RAG ─────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: chamai-qdrant
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    networks:
+      - chamai-network
+    profiles:
+      - full
+
+  # ── Redis — Job Queue / Cache ────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: chamai-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - chamai-network
+    profiles:
+      - full
+
+volumes:
+  openclaw-data:
+  qdrant-data:
+  redis-data:
+
+networks:
+  chamai-network:
+    driver: bridge
